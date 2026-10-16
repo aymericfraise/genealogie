@@ -107,8 +107,8 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
     map.addLayer({ id: "counts", type: "symbol", source: "counts",
       layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": 15, "text-allow-overlap": true, "text-ignore-placement": true },
       paint: { "text-halo-color": "white", "text-halo-width": 2 } })
-    map.on("click", "people", e => select(byId[e.features[0].properties.id]))
-    map.on("click", "dim", e => select(byId[e.features[0].properties.id]))
+    map.on("click", "people", e => pickOnMap(byId[e.features[0].properties.id]))
+    map.on("click", "dim", e => pickOnMap(byId[e.features[0].properties.id]))
     // count click: zoom until the zone's people fill the screen
     map.on("click", "counts", e => {
       const bounds = new maplibregl.LngLatBounds()
@@ -574,12 +574,18 @@ function focusOn(id) {
   select(p)
 }
 
+// map click: the timeline glides to their birth, at the same timeline zoom; the map stays
+function pickOnMap(p) {
+  travel(p.from, null, true)
+  select(p)
+}
+
 let flight = 0 // bumped to stop the running timeline animation
 const ease = t => t < 0.5 ? 4 * t ** 3 : 1 - (2 - 2 * t) ** 3 / 2
 
 // one motion to year y and place lngLat (either may be missing): the map zooms out and back in (flyTo),
-// the timeline does the same in step, zooming out until both years fit, so the jump's size shows on both
-function travel(y, lngLat) {
+// the timeline does the same in step, zooming out until both years fit (unless keepZoom), so the jump's size shows on both
+function travel(y, lngLat, keepZoom) {
   const w = wheel.clientWidth, y0 = center(), dy = y ? Math.abs(y - y0) : 0
   const px = lngLat && mapReady ? map.project(lngLat).dist(map.project(map.getCenter())) : 0
   const dz = lngLat && mapReady ? Math.abs(12 - map.getZoom()) : 0
@@ -587,7 +593,7 @@ function travel(y, lngLat) {
   if (lngLat && mapReady) map.flyTo({ center: lngLat, zoom: 12, duration, easing: ease })
   if (!y) return
   const id = ++flight, ppy0 = ppy, start = performance.now()
-  const far = Math.max(60 / (last - first), Math.min(ppy0, 0.6 * w / Math.max(1, dy)))
+  const far = keepZoom ? ppy0 : Math.max(60 / (last - first), Math.min(ppy0, 0.6 * w / Math.max(1, dy)))
   const step = now => {
     if (id != flight) return
     const t = Math.min(1, (now - start) / duration)
