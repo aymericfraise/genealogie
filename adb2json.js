@@ -1,6 +1,6 @@
 // Généatique database (.adb, Accuracer "ACR5" format) -> people.json
 // usage: node adb2json.js "Mes généalogies/fraise.gwa/fraise.adb"            -> writes people.json
-//        node adb2json.js "Mes généalogies/fraise.gwa/fraise.adb" PASSWORD   -> writes people.enc (encrypted)
+//        node adb2json.js "Mes généalogies/fraise.gwa/fraise.adb" PASSWORD   -> writes fraise.enc (encrypted, named after the .adb)
 //
 // File = 4096-byte pages. Each table page starts with "ACSP", then table id (u32 @8), page type (u32 @16).
 // Type 12 = rows: slot bitmap @20 (1 bit per row, 1 = free), then fixed-size rows.
@@ -145,5 +145,5 @@ else { // PBKDF2-SHA256 -> AES-256-GCM, file = salt(16) iv(12) ciphertext tag(16
   const crypto = require("crypto")
   const salt = crypto.randomBytes(16), iv = crypto.randomBytes(12)
   const cipher = crypto.createCipheriv("aes-256-gcm", crypto.pbkdf2Sync(password, salt, 200000, 32, "sha256"), iv)
-  require("fs").writeFileSync("people.enc", Buffer.concat([salt, iv, cipher.update(json), cipher.final(), cipher.getAuthTag()]))
+  require("fs").writeFileSync(require("path").basename(process.argv[2], ".adb") + ".enc", Buffer.concat([salt, iv, cipher.update(json), cipher.final(), cipher.getAuthTag()]))
 }
