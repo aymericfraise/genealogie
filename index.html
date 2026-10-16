@@ -233,22 +233,25 @@ function layTree() {
     next[row] = p.x + 1
   }
   const free = row => next[row] ?? next[row + 1] ?? next[row - 1] ?? 0 // where someone with nothing to go by goes
-  const person = (p, row) => {
+  // side: 1 for a father, whose brothers and sisters go on his left, -1 for a mother, whose go on her right, so the couple meets
+  const person = (p, row, side) => {
     if (p.laid) return
+    p.side = side
     const [a, b] = parents(p)
     if (a) family(a, b, row - 1)
     if (!p.laid) put(p, row, free(row))
   }
   // couple a + b (b may be missing) in row: a, then b with their ancestors, then their children below
   const family = (a, b, row) => {
-    person(a, row)
+    person(a, row, 1)
     if (b && !b.laid) {
-      if (parents(b).length) person(b, row)
+      if (parents(b).length) person(b, row, -1)
       else put(b, row, a.x + 1)
     }
     const key = [a, b].filter(q => q).map(q => q.id).sort().join()
     const kids = [...new Set([a, b].filter(q => q).flatMap(q => q.children))].map(id => byId[id])
-      .filter(k => !k.laid && parents(k).map(q => q.id).sort().join() == key).sort((k, l) => (k.from || 9999) - (l.from || 9999))
+      .filter(k => !k.laid && parents(k).map(q => q.id).sort().join() == key)
+      .sort((k, l) => (k.side || 0) - (l.side || 0) || (k.from || 9999) - (l.from || 9999))
     const lone = k => k.unions.map(u => byId[u.spouse]).filter(s => s && !s.laid && !parents(s).length) // spouses who come with no family
     const width = kids.reduce((n, k) => n + 1 + lone(k).length, 0)
     let x = (b ? (a.x + b.x) / 2 : a.x) - (width - 1) / 2
@@ -269,6 +272,28 @@ function layTree() {
   for (const p of people) count(p)
   const order = people.slice().sort((p, q) => q.ancestors - p.ancestors || (q.from || 0) - (p.from || 0))
   for (const p of order) person(p, 0)
+  // that packs every generation as tight as it goes, so the widest one, far up, pushes the two sides apart all the way down.
+  // So then, keeping each generation's order, sweep up and down moving everyone towards the middle of their children (the
+  // childless: of their parents), as close as they can get while staying a slot apart (least squares, by pool-adjacent-violators):
+  // each generation only as wide as it needs, so the tree opens up as the generations grow
+  const rows = {}
+  for (const p of people) (rows[p.row] = rows[p.row] || []).push(p)
+  const levels = Object.keys(rows).map(Number).sort((a, b) => a - b).map(r => rows[r].sort((p, q) => p.x - q.x))
+  const kin = p => { const kids = p.children.map(id => byId[id]).filter(q => q.row > p.row); return kids.length ? kids : parents(p).filter(q => q.row < p.row) }
+  for (let sweep = 0; sweep < 60; sweep++) for (const row of sweep % 2 ? levels.slice().reverse() : levels) {
+    const blocks = [] // runs of people pushed against each other: x = their shared offset + their index
+    row.forEach((p, i) => {
+      const k = kin(p)
+      blocks.push({ sum: (k.length ? k.reduce((s, q) => s + q.x, 0) / k.length : p.x) - i, n: 1 })
+      while (blocks.length > 1 && blocks.at(-2).sum / blocks.at(-2).n > blocks.at(-1).sum / blocks.at(-1).n) {
+        const b = blocks.pop()
+        blocks.at(-1).sum += b.sum
+        blocks.at(-1).n += b.n
+      }
+    })
+    let i = 0
+    for (const b of blocks) for (let k = 0; k < b.n; k++, i++) row[i].x = b.sum / b.n + i
+  }
   // no birth year: their spouse's, 30 years before a dated child's, or 30 after a dated parent's; with none of these, not in the tree
   for (const p of people) p.treeYear = p.from
   for (let pass = 0; pass < 5; pass++) for (const p of people) if (p.treeYear == null) {
