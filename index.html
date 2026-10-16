@@ -38,7 +38,7 @@
   #legend { position: fixed; top: 54px; right: 10px; z-index: 1000; width: min(300px, calc(100% - 20px)); max-height: calc(100% - 160px); overflow-y: auto; box-sizing: border-box; padding: 6px 12px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; font: 14px system-ui, -apple-system, sans-serif; }
   #legend p { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
   #legend p > :first-child { flex: 0 0 34px; display: grid; place-items: center; }
-  #more button.option { display: flex; align-items: center; gap: 8px; width: auto; padding: 0 14px 0 9px; font: 15px system-ui, -apple-system, sans-serif; }
+  #more button.option { display: flex; align-items: center; gap: 8px; width: auto; padding: 0 9px 0 14px; font: 15px system-ui, -apple-system, sans-serif; }
   #relatives { max-height: 80vh; overflow: hidden; margin-left: -10px; padding-left: 10px; transition: max-height 0.3s; } /* room on the left for the stamps */
   #relatives.collapsed { max-height: 0; }
   .row { padding: 6px 10px; background: white; cursor: pointer; }
@@ -87,6 +87,7 @@ let counts = [] // people alive each year, drawn behind the timeline
 let ancestors = true // 🌳: with someone selected, their ancestors are on the map whatever the years (gray outside them)
 let lineage = null // those people (outside the range faded), or null
 let everyone = true // 👥: people outside the years are on the map too, in light gray
+let links = true // 🔗: parent–child and union lines on the map
 let shown = [] // people on the map
 const inRange = p => p.from <= to && from <= p.to
 
@@ -368,10 +369,10 @@ function place() {
   const linked = new Set(shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
   for (const p of linked) {
     for (const id of [p.father, p.mother]) {
-      if (linked.has(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
+      if (links && linked.has(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
     }
     for (const u of p.unions) {
-      if (linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
+      if (links && linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
     }
   }
   for (const p of shown) {
@@ -568,11 +569,12 @@ function select(p) {
 // … button, top right: which relatives are listed under the card, and 🌳 ancestors
 function drawMenu() {
   more.innerHTML = `<button onclick="menuOpen = !menuOpen; legend.hidden = true; drawMenu()">${ICONS.more}</button>`
-    + (menuOpen ? option(show.unions, "unions", "💍 Afficher les unions")
-      + option(show.parents, "parents", "👪 Afficher les parents")
-      + option(show.children, "children", "🧒 Afficher les enfants")
-      + option(ancestors, "ancestors", "🌳 Afficher les ancêtres")
-      + option(everyone, "everyone", "👥 Afficher tout le monde") : "")
+    + (menuOpen ? option(show.unions, "unions", "💍", "Afficher les unions")
+      + option(show.parents, "parents", "👪", "Afficher les parents")
+      + option(show.children, "children", "🧒", "Afficher les enfants")
+      + option(ancestors, "ancestors", "🌳", "Afficher les ancêtres")
+      + option(everyone, "everyone", "👥", "Afficher tout le monde")
+      + option(links, "links", "🔗", "Afficher les liens") : "")
 }
 
 // ? button: what the map and timeline marks mean; it and the … menu close each other
@@ -604,8 +606,9 @@ function toggleLegend() {
     + item(svg('<line x1="6" y1="11" x2="28" y2="11" stroke="black" stroke-width="2" stroke-dasharray="3 3"/><circle cx="6" cy="11" r="3" fill="white" stroke="black" stroke-width="2"/><circle cx="28" cy="11" r="3" fill="white" stroke="black" stroke-width="2"/>'), "Lieux de la vie de la personne")
 }
 
-function option(on, key, text) {
-  return `<button class="option ${on ? "on" : ""}" onclick="toggle('${key}')">${text}</button>`
+// text then icon, so the icons line up on the right under the … button
+function option(on, key, icon, text) {
+  return `<button class="option ${on ? "on" : ""}" onclick="toggle('${key}')">${text} ${icon}</button>`
 }
 
 function refresh() {
@@ -619,6 +622,7 @@ function refresh() {
 function toggle(key) {
   if (key == "ancestors") ancestors = !ancestors
   else if (key == "everyone") everyone = !everyone
+  else if (key == "links") links = !links
   else show[key] = !show[key]
   refresh()
 }
