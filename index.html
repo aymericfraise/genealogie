@@ -90,7 +90,7 @@ let counts = [] // people alive each year, drawn behind the timeline
 let ancestors = true // 🌳: with someone selected, their ancestors are on the map whatever the years (gray outside them)
 let lineage = null // those people (outside the range faded), or null
 let everyone = true // 👥: people outside the years are on the map too, in light gray
-let links = true // 🔗: parent–child and union lines on the map
+let links = false // 🔗: parent–child and union lines on the map
 let shown = [] // people on the map
 const inRange = p => p.from <= to && from <= p.to
 
