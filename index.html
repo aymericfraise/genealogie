@@ -232,22 +232,22 @@ function drawRuler() {
   const step = steps.find(s => s * ppy >= 55) // numbered ticks
   const fade = s => Math.min(1, Math.max(0, (s * ppy - 12) / 28)) // finer ticks fade in as they spread apart, from 12px to 40px
   const fine = steps.find(s => fade(s) > 0)
-  // ruler ticks hanging from the top edge, rounded, longer and darker the rounder the year: 14px for numbered ones, 4 to 9px for the others
+  // soft rounded ticks from the top down to the numbers' lane (the bottom 22px, kept clear), fainter for finer years
   Object.assign(ctx, { strokeStyle: "#999", lineWidth: 1.5, lineCap: "round" })
   for (let y = Math.ceil(left / fine) * fine; x(y) < w; y += fine) {
     const f = fade(steps.findLast(s => y % s == 0))
     ctx.globalAlpha = f
     ctx.beginPath()
     ctx.moveTo(x(y), 1)
-    ctx.lineTo(x(y), y % step == 0 ? 14 : 4 + 5 * f)
+    ctx.lineTo(x(y), h - 22)
     ctx.stroke()
   }
   ctx.globalAlpha = 1
-  // bold numbers centred under their tick, with a white outline over the count bars
+  // bold numbers centred under their tick in the bottom lane, with a white outline over the count bars
   Object.assign(ctx, { font: "bold 15px system-ui, -apple-system, sans-serif", textAlign: "center", fillStyle: "#333", strokeStyle: "white", lineWidth: 4, lineJoin: "round" })
   for (let y = Math.ceil((left - 30 / ppy) / step) * step; x(y) < w + 30; y += step) { // and those half off the edges
-    ctx.strokeText(y, x(y), 33)
-    ctx.fillText(y, x(y), 33)
+    ctx.strokeText(y, x(y), h - 6)
+    ctx.fillText(y, x(y), h - 6)
   }
 }
 
