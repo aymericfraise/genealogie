@@ -533,7 +533,7 @@ function draw() {
   shownSet = new Set(shown)
   if (!mapReady) return
 
-  // people at the same place sit on a small ring (15 m apart), visible once clustering stops
+  // people at the same place sit on a square grid centred on it, 15 m apart, filled row by row, visible once clustering stops
   const groups = {}
   for (const p of shown) {
     groups[spot(p)] = groups[spot(p)] || []
@@ -541,10 +541,10 @@ function draw() {
   }
   for (const group of Object.values(groups)) {
     const [lat, lon] = spot(group[0])
-    const meters = group.length == 1 ? 0 : group.length * 15 / (2 * Math.PI)
+    const columns = Math.ceil(Math.sqrt(group.length)), rows = Math.ceil(group.length / columns)
     group.forEach((p, i) => {
-      const angle = 2 * Math.PI * i / group.length
-      p.ll = [lon + meters * Math.cos(angle) / (111320 * Math.cos(lat * Math.PI / 180)), lat + meters * Math.sin(angle) / 111320] // [lon, lat] like MapLibre
+      const east = (i % columns - (columns - 1) / 2) * 15, south = (Math.floor(i / columns) - (rows - 1) / 2) * 15 // meters from the place
+      p.ll = [lon + east / (111320 * Math.cos(lat * Math.PI / 180)), lat - south / 111320] // [lon, lat] like MapLibre
       p.m = maplibregl.MercatorCoordinate.fromLngLat(p.ll) // world spot, 0 to 1
     })
   }
