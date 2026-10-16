@@ -263,7 +263,6 @@ function draw() {
     add(selected)
   }
   shown = people.filter(p => p.place && (everyone || (lineage ? lineage.has(p) : inRange(p))))
-  console.log("years", from, to, ":", shown.length, "on map")
   if (!mapReady) return
 
   // people at the same place sit on a small ring (15 m apart), visible once clustering stops
@@ -509,13 +508,12 @@ function row(id) {
 }
 
 // lines joined into one block, with the relation emoji as a stamp on its left edge, halfway down
-function group(icon, rows) {
+function block(icon, rows) {
   return rows.join("") ? `<div class="stamp-wrap"><div class="group">${rows.join("")}</div><span class="stamp">${icon}</span></div>` : ""
 }
 
 // map click: person card (bottom) with relatives listed above it; the chevron opens the details
 function select(p) {
-  console.log("select", p)
   selected = p
   card.hidden = false
   const marriages = p.unions.map(u => u.year).filter(y => y)
@@ -524,9 +522,9 @@ function select(p) {
     + `<button onclick="panel.classList.toggle('open'); select(selected)">${panel.classList.contains("open") ? ICONS.up : ICONS.right}</button>`
     + `<button onclick="unselect()">${ICONS.close}</button></div>`
   drawMenu()
-  relatives.innerHTML = (show.children ? p.children.map(id => group("🧒", [row(id)])).join("") : "")
-    + (show.parents ? group("👪", [row(p.father), row(p.mother)]) : "")
-    + (show.unions ? group("💍", p.unions.map(u => row(u.spouse))) : "")
+  relatives.innerHTML = (show.children ? p.children.map(id => block("🧒", [row(id)])).join("") : "")
+    + (show.parents ? block("👪", [row(p.father), row(p.mother)]) : "")
+    + (show.unions ? block("💍", p.unions.map(u => row(u.spouse))) : "")
   if (panel.classList.contains("open")) details()
   relatives.classList.toggle("collapsed", panel.classList.contains("open")) // details replace the relatives list, both slide at once
   draw()
