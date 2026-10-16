@@ -544,22 +544,36 @@ function toggle(key) {
   refresh()
 }
 
-// drawer pull: a copy of the clicked line slides down and grows into the person card, the other lines fade
+// drawer pull, all at once: a copy of the clicked line slides down and grows into the person card, still copies of the old
+// card and list fade out, and the new person's relatives slide up out of the card
 function pick(el, id) {
   const from = el.getBoundingClientRect(), to = summary.getBoundingClientRect()
   const ghost = el.cloneNode(true)
   ghost.firstChild.textContent = { M: "♂", F: "♀" }[byId[id].sex] || "" // the card has ♂/♀ instead of the relation emoji
   ghost.className = "row line ghost"
   Object.assign(ghost.style, { left: from.left + "px", top: from.top + "px", width: from.width + "px", height: from.height + "px" })
+  for (const e of [relatives, summary]) {
+    const r = e.getBoundingClientRect(), copy = e.cloneNode(true)
+    copy.removeAttribute("id")
+    Object.assign(copy.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", margin: 0, zIndex: 1999, pointerEvents: "none" })
+    if (e == relatives) copy.children[[...relatives.children].indexOf(el)].style.visibility = "hidden" // the moving copy replaces it
+    document.body.append(copy)
+    copy.animate([{ opacity: 1 }, { opacity: 0 }], 300).onfinish = () => copy.remove()
+  }
   document.body.append(ghost)
-  for (const r of relatives.children) r.style.opacity = 0
   requestAnimationFrame(() => requestAnimationFrame(() => {
     Object.assign(ghost.style, { left: to.left + "px", top: to.top + "px", width: to.width + "px", height: to.height + "px", padding: "8px 10px", borderRadius: "12px" })
   }))
+  focusOn(id)
+  summary.style.visibility = "hidden" // until the moving copy lands on it
+  for (const r of relatives.children) {
+    const dy = to.top - r.getBoundingClientRect().top
+    r.animate([{ transform: `translateY(${dy}px)`, opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 300, easing: "ease-out" })
+  }
   setTimeout(() => {
-    focusOn(id)
     ghost.remove()
-    for (const e of [...relatives.children, summary.querySelector(".buttons")]) e.classList.add("appear")
+    summary.style.visibility = ""
+    summary.querySelector(".buttons").classList.add("appear")
   }, 300)
 }
 
