@@ -76,6 +76,8 @@ let from = 0, to = 0 // years under the 60px range in the middle: people alive a
 let counts = [] // people alive each year, drawn behind the timeline
 let ancestors = true // 🌳: with someone selected, the map shows only them and their ancestors
 let lineage = null // those people (outside the range faded), or null
+let shown = [] // people on the map
+const inRange = p => p.from <= to && from <= p.to
 
 // MapLibre map on OpenFreeMap (free, no account), keeping only nature, water, town names and borders: no roads, rails or buildings
 let map = null, mapReady = false
@@ -92,7 +94,7 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
     addIcons()
     const icons = { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true }
     map.addLayer({ id: "lines", type: "line", source: "lines", paint: { "line-color": ["match", ["get", "kind"], "union", "red", "gray"], "line-width": 1, "line-opacity": ["case", ["get", "dim"], 0.3, 1] } })
-    map.addLayer({ id: "dim", type: "symbol", source: "dim", layout: icons, paint: { "icon-opacity": 0.5 } })
+    map.addLayer({ id: "dim", type: "symbol", source: "dim", layout: icons })
     map.addLayer({ id: "trail-line", type: "line", source: "trail", filter: ["==", ["get", "kind"], "path"], paint: { "line-color": "black", "line-width": 2, "line-dasharray": [3, 3] } })
     map.addLayer({ id: "people", type: "symbol", source: "people", layout: icons })
     map.addLayer({ id: "trail-stops", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "stop"],
@@ -113,7 +115,10 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
       for (const p of levels[shownZoom][e.features[0].properties.i].members) bounds.extend(p.ll)
       map.fitBounds(bounds, { padding: 80, maxZoom: 17 })
     })
-    map.on("zoom", () => { if (shownZoom != level()) drawCounts() })
+    map.on("zoom", () => {
+      place()
+      if (shownZoom != level()) drawCounts()
+    })
     mapReady = true
     draw()
   })
@@ -234,14 +239,13 @@ function draw() {
   from = y - half
   to = y + half
   needle.textContent = from == to ? from : from + "–" + to
-  const inRange = p => p.from <= to && from <= p.to
   lineage = null
   if (ancestors && selected) {
     lineage = new Set()
     const add = p => { if (p) { lineage.add(p); add(byId[p.father]); add(byId[p.mother]) } }
     add(selected)
   }
-  const shown = people.filter(p => p.place && (lineage ? lineage.has(p) : inRange(p)))
+  shown = people.filter(p => p.place && (lineage ? lineage.has(p) : inRange(p)))
   console.log("years", from, to, ":", shown.length, "on map")
   if (!mapReady) return
 
@@ -259,21 +263,45 @@ function draw() {
       p.ll = [lon + meters * Math.cos(angle) / (111320 * Math.cos(lat * Math.PI / 180)), lat + meters * Math.sin(angle) / 111320] // [lon, lat] like MapLibre
     })
   }
+  group(shown.filter(inRange))
+  drawCounts()
+  place()
+}
+
+// icons, lines and the selection ring, redrawn at each zoom step: icons closer than 12px on screen are pulled into a stack,
+// a 4 × 4 grid of slots 3px apart with rows going up (past 16, the rest share the last slot), fully in it once under 4px.
+// Slots go by distance from the stack's first person, an order zooming doesn't change, so people join and leave one by one.
+function place() {
+  const scale = 512 * 2 ** map.getZoom(), stacks = []
+  for (const p of shown) {
+    const m = maplibregl.MercatorCoordinate.fromLngLat(p.ll), x = m.x * scale, y = m.y * scale // in screen pixels
+    const s = stacks.find(s => Math.hypot(s.x - x, s.y - y) < 12)
+    if (s) s.members.push({ p, x, y, d: Math.hypot(s.x - x, s.y - y) })
+    else stacks.push({ x, y, members: [{ p, x, y, d: 0 }] })
+  }
+  for (const s of stacks) {
+    s.members.sort((a, b) => a.d - b.d)
+    s.members.forEach(({ p, x, y, d }, i) => {
+      const k = Math.min(i, 15), sx = s.x + 3 * (k % 4), sy = s.y - 3 * Math.floor(k / 4)
+      let t = Math.min(1, Math.max(0, (d - 4) / 8)) // 0 in the slot, 1 on their own spot
+      t = t * t * (3 - 2 * t)
+      const ll = new maplibregl.MercatorCoordinate((sx + (x - sx) * t) / scale, (sy + (y - sy) * t) / scale).toLngLat()
+      p.pos = [ll.lng, ll.lat]
+    })
+  }
   // a line is faded when either end is
   const lines = [], dots = [], dim = [], trail = []
   for (const p of shown) {
     for (const id of [p.father, p.mother]) {
-      if (shown.includes(byId[id])) lines.push(feature("LineString", [byId[id].ll, p.ll], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
+      if (shown.includes(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
     }
     for (const u of p.unions) {
-      if (shown.includes(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].ll, p.ll], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
+      if (shown.includes(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
     }
     const icon = { M: "man", F: "woman" }[p.sex] || "person"
-    if (inRange(p)) dots.push(feature("Point", p.ll, { id: p.id, icon }))
-    else dim.push(feature("Point", p.ll, { id: p.id, icon: "gray-" + icon }))
+    if (inRange(p)) dots.push(feature("Point", p.pos, { id: p.id, icon }))
+    else dim.push(feature("Point", p.pos, { id: p.id, icon: "gray-" + icon }))
   }
-  group(shown.filter(inRange))
-  drawCounts()
 
   // selected person: black ring, and their life's places (white circles) joined by a dashed line in date order
   if (selected) {
@@ -286,7 +314,7 @@ function draw() {
       labels[key] = labels[key] ? labels[key] + ", " + text : text
     }
     for (const key in labels) trail.push(feature("Point", key.split(",").map(Number), { kind: "stop", label: labels[key] }))
-    if (shown.includes(selected)) trail.push(feature("Point", selected.ll, { kind: "selected" }))
+    if (shown.includes(selected)) trail.push(feature("Point", selected.pos, { kind: "selected" }))
   }
   map.getSource("lines").setData({ type: "FeatureCollection", features: lines })
   map.getSource("people").setData({ type: "FeatureCollection", features: dots })
