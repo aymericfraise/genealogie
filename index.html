@@ -610,16 +610,16 @@ function details() {
     + (p.death ? `<p><b>✝️ Décès</b>${when(p.death)}</p>` : "")
 }
 
-// person link: go to their birth (year and place)
+// person link: go to their birth (year, or death year if none, and place)
 function focusOn(id) {
   const p = byId[id]
-  travel(p.from, p.place && [p.place[1], p.place[0]])
+  travel(p.from || (p.death && p.death.year), p.place && [p.place[1], p.place[0]])
   select(p)
 }
 
-// map click: the timeline glides to their birth, at the same timeline zoom; the map stays
+// map click: the timeline glides to their birth (death if no birth), at the same timeline zoom; the map stays
 function pickOnMap(p) {
-  travel(p.from, null, true)
+  travel(p.from || (p.death && p.death.year), null, true)
   select(p)
 }
 
