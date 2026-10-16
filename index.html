@@ -20,12 +20,9 @@
   #card { position: fixed; left: 10px; bottom: 90px; width: min(340px, calc(100% - 20px)); z-index: 1000; font: 16px system-ui, -apple-system, sans-serif; }
   #summary { padding: 8px 10px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; }
   .line { display: flex; gap: 8px; white-space: nowrap; }
-  .sex { flex: 0 0 22px; height: 22px; border-radius: 999px; text-align: center; line-height: 22px; color: white; background: gray; }
-  .sex.M { background: #2f6fd6; }
-  .sex.F { background: #e0457b; }
-  .row .sex { font-size: 13px; box-sizing: border-box; line-height: 18px; border: 2px solid gray; background: #eee; } /* relation emoji fits in the disk */
-  .row .sex.M { border-color: #2f6fd6; background: #e3ecfb; }
-  .row .sex.F { border-color: #e0457b; background: #fbe3ee; }
+  .sex { flex: 0 0 22px; height: 22px; box-sizing: border-box; border: 2px solid gray; border-radius: 999px; text-align: center; line-height: 18px; color: gray; }
+  .sex.M { border-color: #2f6fd6; color: #2f6fd6; }
+  .sex.F { border-color: #e0457b; color: #e0457b; }
   .line .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
   .line .years { color: #666; font-variant-numeric: tabular-nums; cursor: pointer; }
   .buttons { display: flex; gap: 6px; margin-top: 6px; }
@@ -36,9 +33,13 @@
   #more { position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
   #more button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font-size: 18px; }
   #more button.on { background: #c9d8f2; }
-  #relatives { max-height: 80vh; overflow: hidden; transition: max-height 0.3s; }
+  #relatives { max-height: 80vh; overflow: hidden; margin-left: -10px; padding-left: 10px; transition: max-height 0.3s; } /* room on the left for the stamps */
   #relatives.collapsed { max-height: 0; }
-  .row { margin-bottom: 4px; padding: 6px 10px; border-radius: 10px; background: white; box-shadow: 0 1px 4px #0002; cursor: pointer; transition: opacity 0.3s; }
+  .row { padding: 6px 10px; background: white; cursor: pointer; }
+  .group { position: relative; margin-bottom: 4px; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px #0002; } /* parents, spouses, or one child: lines joined into one block */
+  .group .row + .row { border-top: 1px solid #eee; }
+  .stamp-wrap { position: relative; }
+  .stamp { position: absolute; left: -10px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 999px; background: white; box-shadow: 0 1px 3px #0003; font-size: 13px; pointer-events: none; } /* relation emoji, on the left edge, across the seam */
   .ghost { position: fixed; z-index: 2000; margin: 0; box-sizing: border-box; }
   .appear { animation: appear 0.3s; }
   @keyframes appear { from { opacity: 0; } }
@@ -494,13 +495,18 @@ const ICONS = {
   close: svg('<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>'),
 }
 
-// one line: "Prénom NOM…  1750–1802", after a disk in the person's sex colour holding the relation emoji, or ♂/♀ without one
-function line(p, icon) {
-  return `<span class="sex ${p.sex}">${icon || { M: "♂", F: "♀" }[p.sex] || ""}</span><span class="name">${p.name}</span><span class="years" onclick="event.stopPropagation(); cycleDates()">${lifespan(p)}</span>`
+// one line: "Prénom NOM…  1750–1802", after ♂/♀ in a ring of the person's sex colour
+function line(p) {
+  return `<span class="sex ${p.sex}">${{ M: "♂", F: "♀" }[p.sex] || ""}</span><span class="name">${p.name}</span><span class="years" onclick="event.stopPropagation(); cycleDates()">${lifespan(p)}</span>`
 }
 
-function row(icon, id) {
-  return byId[id] ? `<div class="row line" onclick="pick(this, '${id}')">${line(byId[id], icon)}</div>` : ""
+function row(id) {
+  return byId[id] ? `<div class="row line" onclick="pick(this, '${id}')">${line(byId[id])}</div>` : ""
+}
+
+// lines joined into one block, with the relation emoji as a stamp on its left edge, halfway down
+function group(icon, rows) {
+  return rows.join("") ? `<div class="stamp-wrap"><div class="group">${rows.join("")}</div><span class="stamp">${icon}</span></div>` : ""
 }
 
 // map click: person card (bottom) with relatives listed above it; the chevron opens the details
@@ -514,9 +520,9 @@ function select(p) {
     + `<button onclick="panel.classList.toggle('open'); select(selected)">${panel.classList.contains("open") ? ICONS.up : ICONS.right}</button>`
     + `<button onclick="unselect()">${ICONS.close}</button></div>`
   drawMenu()
-  relatives.innerHTML = (show.children ? p.children.map(id => row("🧒", id)).join("") : "")
-    + (show.parents ? row("👪", p.father) + row("👪", p.mother) : "")
-    + (show.unions ? p.unions.map(u => row("💍", u.spouse)).join("") : "")
+  relatives.innerHTML = (show.children ? p.children.map(id => group("🧒", [row(id)])).join("") : "")
+    + (show.parents ? group("👪", [row(p.father), row(p.mother)]) : "")
+    + (show.unions ? group("💍", p.unions.map(u => row(u.spouse))) : "")
   if (panel.classList.contains("open")) details()
   relatives.classList.toggle("collapsed", panel.classList.contains("open")) // details replace the relatives list, both slide at once
   draw()
@@ -553,21 +559,25 @@ function pick(el, id) {
   const from = el.getBoundingClientRect(), to = summary.getBoundingClientRect(), shift = to.top - from.top
   const motion = { duration: 300, easing: "ease" }
   const ghost = el.cloneNode(true)
-  ghost.firstChild.textContent = { M: "♂", F: "♀" }[byId[id].sex] || "" // the card has ♂/♀ instead of the relation emoji
   ghost.className = "row line ghost"
   document.body.append(ghost)
   ghost.animate([
-    { left: from.left + "px", top: from.top + "px", width: from.width + "px", height: from.height + "px" },
-    { left: to.left + "px", top: to.top + "px", width: to.width + "px", height: to.height + "px", padding: "8px 10px", borderRadius: "12px" },
+    { left: from.left + "px", top: from.top + "px", width: from.width + "px", height: from.height + "px", borderRadius: 0 },
+    { left: to.left + "px", top: to.top + "px", width: to.width + "px", height: to.height + "px", padding: "8px 10px", borderRadius: "12px", boxShadow: "0 1px 6px #0003" },
   ], { ...motion, fill: "forwards" })
   for (const e of [relatives, summary]) {
-    const r = e.getBoundingClientRect(), copy = e.cloneNode(true)
-    copy.removeAttribute("id")
-    Object.assign(copy.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", margin: 0, zIndex: 1999, pointerEvents: "none" })
-    if (e == relatives) copy.children[[...relatives.children].indexOf(el)].style.visibility = "hidden" // the moving copy replaces it
-    document.body.append(copy)
+    const r = e.getBoundingClientRect(), css = getComputedStyle(e), copy = e.cloneNode(true)
+    copy.removeAttribute("id") // no duplicate ids, so its #id style is copied by hand
+    Object.assign(copy.style, { position: "absolute", left: r.left + "px", top: r.top + "px", width: r.width + "px", boxSizing: "border-box", margin: 0,
+      padding: css.padding, background: css.background, borderRadius: css.borderRadius, boxShadow: css.boxShadow })
+    if (e == relatives) copy.querySelectorAll(".row")[[...relatives.querySelectorAll(".row")].indexOf(el)].style.visibility = "hidden" // the moving copy replaces it
+    // the old list is cut at the card's top edge, so nothing shows below the card as it slides down
+    const clip = document.createElement("div")
+    Object.assign(clip.style, { position: "fixed", left: 0, right: 0, top: 0, height: (e == relatives ? to.top : innerHeight) + "px", overflow: "hidden", zIndex: 1999, pointerEvents: "none" })
+    clip.append(copy)
+    document.body.append(clip)
     const down = e == relatives ? shift : 0
-    copy.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: `translateY(${down}px)` }], motion).onfinish = () => copy.remove()
+    copy.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: `translateY(${down}px)` }], motion).onfinish = () => clip.remove()
   }
   focusOn(id)
   summary.style.visibility = "hidden" // until the moving copy lands on it
