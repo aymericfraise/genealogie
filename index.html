@@ -212,30 +212,56 @@ function start(list) {
   setYear(last)
 }
 
-// full tree: each person with their spouses side by side, their children's families below, parents centred over their children.
-// x: slots handed out left to right as families are laid out; y: generations. Someone married into the family sits by their
-// spouse, so their own parents end up elsewhere, joined by a long line.
+// full tree, grown from the person with the most ancestors: a couple's ancestors above them, the father's on the left and the
+// mother's on the right, their children centred under them, each with their spouse next to them, then the children's own families.
+// Each generation is a row filled left to right: a person goes where they belong unless the row is already used up to there.
 const SLOT = 0.001, GEN = 0.0015 // degrees, near 0,0 where the map is not stretched
 function layTree() {
-  let next = 0
-  const lay = (p, depth) => {
-    const group = [p, ...p.unions.map(u => byId[u.spouse]).filter(s => s && s.depth == null)]
-    for (const q of group) q.depth = depth
-    const kids = [...new Set(group.flatMap(q => q.children))].map(id => byId[id]).filter(k => k.depth == null).sort((a, b) => (a.from || 9999) - (b.from || 9999))
-    const start = next
-    for (const k of kids) if (k.depth == null) lay(k, depth + 1)
-    const mid = next - start >= group.length ? (start + next - 1) / 2 : start + (group.length - 1) / 2
-    next = Math.max(next, start + group.length)
-    group.forEach((q, i) => q.node = [-depth * GEN, (mid - (group.length - 1) / 2 + i) * SLOT])
+  const next = {} // next free slot of each row
+  const parents = p => [byId[p.father], byId[p.mother]].filter(q => q)
+  const put = (p, row, x) => {
+    p.laid = true
+    p.row = row
+    p.x = next[row] == null ? x : Math.max(next[row], x)
+    next[row] = p.x + 1
   }
-  // first the people with no known parents and no spouse with known parents, oldest first; then whoever is left
-  // (a person whose children are already laid out goes one generation above them)
-  const hasParents = p => byId[p.father] || byId[p.mother]
-  const roots = people.filter(p => !hasParents(p) && !p.unions.some(u => byId[u.spouse] && hasParents(byId[u.spouse])))
-  for (const p of [...roots.sort((a, b) => (a.from || 9999) - (b.from || 9999)), ...people]) if (p.depth == null) {
-    const laid = p.children.map(id => byId[id]).filter(k => k.depth != null)
-    lay(p, laid.length ? Math.min(...laid.map(k => k.depth)) - 1 : 0)
+  const free = row => next[row] ?? next[row + 1] ?? next[row - 1] ?? 0 // where someone with nothing to go by goes
+  const person = (p, row) => {
+    if (p.laid) return
+    const [a, b] = parents(p)
+    if (a) family(a, b, row - 1)
+    if (!p.laid) put(p, row, free(row))
   }
+  // couple a + b (b may be missing) in row: a, then b with their ancestors, then their children below
+  const family = (a, b, row) => {
+    person(a, row)
+    if (b && !b.laid) {
+      if (parents(b).length) person(b, row)
+      else put(b, row, a.x + 1)
+    }
+    const key = [a, b].filter(q => q).map(q => q.id).sort().join()
+    const kids = [...new Set([a, b].filter(q => q).flatMap(q => q.children))].map(id => byId[id])
+      .filter(k => !k.laid && parents(k).map(q => q.id).sort().join() == key).sort((k, l) => (k.from || 9999) - (l.from || 9999))
+    const lone = k => k.unions.map(u => byId[u.spouse]).filter(s => s && !s.laid && !parents(s).length) // spouses who come with no family
+    const width = kids.reduce((n, k) => n + 1 + lone(k).length, 0)
+    let x = (b ? (a.x + b.x) / 2 : a.x) - (width - 1) / 2
+    for (const k of kids) {
+      put(k, row + 1, x)
+      x = k.x + 1
+      for (const s of lone(k)) {
+        put(s, row + 1, x)
+        x = s.x + 1
+      }
+    }
+    for (const k of kids) {
+      for (const u of k.unions) if (byId[u.spouse]) family(k, byId[u.spouse], row + 1)
+      family(k, null, row + 1) // children with no other known parent
+    }
+  }
+  const count = p => p.ancestors ?? (p.ancestors = 0, p.ancestors = parents(p).reduce((n, q) => n + 1 + count(q), 0)) // remembered, as lines meet again
+  for (const p of people) count(p)
+  for (const p of people.slice().sort((p, q) => q.ancestors - p.ancestors || (q.from || 0) - (p.from || 0))) person(p, 0)
+  for (const p of people) p.node = [-p.row * GEN, p.x * SLOT]
 }
 
 // tree button: switch between the world map and the tree; the selected person is centred on the other side,
@@ -396,7 +422,7 @@ function place() {
     p.y = m.y * scale
     p.anchor = null
     let d = 12
-    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
+    if (!tree) for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
       if (Math.hypot(q.x - p.x, q.y - p.y) < d) {
         d = Math.hypot(q.x - p.x, q.y - p.y)
         p.anchor = q
@@ -433,9 +459,13 @@ function place() {
   const lines = [], dots = [], dim = [], trail = []
   const linked = new Set(tree ? shown : shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
   for (const p of linked) {
-    for (const id of [p.father, p.mother]) {
-      if ((links || tree) && linked.has(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
+    const ps = [byId[p.father], byId[p.mother]].filter(q => linked.has(q))
+    if (tree && ps.length) {
+      // tree: one line from the middle of the parents, down to a bar halfway above the child's row, along it, and down to the child
+      const top = [ps.reduce((s, q) => s + q.pos[0], 0) / ps.length, ps.reduce((s, q) => s + q.pos[1], 0) / ps.length], bar = p.pos[1] + GEN / 2
+      lines.push(feature("LineString", [top, [top[0], bar], [p.pos[0], bar], p.pos], { kind: "parent", dim: !inRange(p) || ps.some(q => !inRange(q)) }))
     }
+    else for (const q of ps) if (links) lines.push(feature("LineString", [q.pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(q) }))
     for (const u of p.unions) {
       if ((links || tree) && linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
     }
@@ -500,7 +530,7 @@ function group(list) {
 function drawCounts() {
   shownZoom = level()
   const features = []
-  ;(levels[shownZoom] || []).forEach((g, i) => {
+  if (!tree) (levels[shownZoom] || []).forEach((g, i) => {
     if (g.members.length < 2) return
     const ll = new maplibregl.MercatorCoordinate(g.x, g.y).toLngLat()
     features.push(feature("Point", [ll.lng, ll.lat], { i, n: g.members.length }))
@@ -595,7 +625,7 @@ const ICONS = {
   up: svg('<polyline points="5 15 12 8 19 15"/>'),
   down: svg('<polyline points="5 9 12 16 19 9"/>'),
   close: svg('<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>'),
-  tree: svg('<rect x="9" y="3" width="6" height="5"/><rect x="3" y="16" width="6" height="5"/><rect x="15" y="16" width="6" height="5"/><path d="M12 8v4M6 16v-4h12v4"/>'),
+  tree: svg('<path d="M12 22v-8M12 17l-3-3M12 15.5l3-2.5"/><path d="M8 16.5a5 5 0 0 1-2.5-8.8 6.5 6.5 0 0 1 13 0 5 5 0 0 1-2.5 8.8"/>'),
 }
 treeToggle.innerHTML = ICONS.tree
 
