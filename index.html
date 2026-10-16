@@ -23,6 +23,8 @@
   body.tree #range { left: 0; top: calc(50% - 30px); bottom: auto; width: 80px; height: 60px; border-top: 2px solid #333; border-right: 0; }
   body.tree #needle { left: 84px; top: 50%; bottom: auto; transform: translateY(-50%); }
   body.tree #card { left: 90px; bottom: 10px; width: min(340px, calc(100% - 100px)); }
+  body.gens #ruler, body.gens #wheel, body.gens #range, body.gens #needle { display: none; } /* tree by generation: no years to show */
+  body.gens #card { left: 10px; width: min(340px, calc(100% - 20px)); }
   #card { display: grid; position: fixed; left: 10px; bottom: 90px; width: min(340px, calc(100% - 20px)); z-index: 1000; font: 16px system-ui, -apple-system, sans-serif; }
   #summary { position: relative; padding: 8px 10px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; }
   #card.wed #summary { border-top: 1px solid #eee; border-top-left-radius: 0; border-top-right-radius: 0; } /* spouses' block sits on the card, 💍 on the seam */
@@ -104,7 +106,9 @@ let links = false // 🔗: parent–child and union lines on the map
 let shown = [] // people on the map
 const inRange = p => p.from <= to && from <= p.to
 let tree = false // tree button: the map shows the full tree instead of the world, on a blank background
-const spot = p => tree ? p.node : p.place // [lat, lon] on the current view
+let byYear = false // 📅: in the tree, each person at their own birth year, with the timeline beside it; otherwise one row per generation
+const spot = p => tree ? (byYear ? p.yearNode : p.genNode) : p.place // [lat, lon] on the current view
+const synced = () => tree && byYear // the tree moves with the timeline
 
 // MapLibre map on OpenFreeMap (free, no account), keeping only nature, water, town names and borders: no roads, rails or buildings
 let map = null, mapReady = false, baseLayers = []
@@ -221,8 +225,8 @@ function start(list) {
 // a couple's ancestors laid out first, the father's on the left and the mother's on the right, their children centred under them, each with their
 // spouse next to them, then the children's own families. Each generation fills its own slots in order: a person goes where they
 // belong unless their generation already used it.
-const YEAR = 0.0002, SLOT = 0.0032 // degrees, near 0,0 where the map is not stretched
-let treeHome = 0 // longitude of the person the tree grew from
+const YEAR = 0.0002, SLOT = 0.0032, GEN = 30 * YEAR // degrees, near 0,0 where the map is not stretched
+let treeHome = null // the person the tree grew from
 function layTree() {
   const next = {} // next free slot of each row
   const parents = p => [byId[p.father], byId[p.mother]].filter(q => q)
@@ -244,6 +248,7 @@ function layTree() {
   // couple a + b (b may be missing) in row: a, then b with their ancestors, then their children below
   const family = (a, b, row) => {
     person(a, row, 1)
+    row = a.row // a may already be in the tree, a generation of their own
     if (b && !b.laid) {
       if (parents(b).length) person(b, row, -1)
       else put(b, row, a.x + 1)
@@ -271,14 +276,54 @@ function layTree() {
   const count = p => p.ancestors ?? (p.ancestors = 0, p.ancestors = parents(p).reduce((n, q) => n + 1 + count(q), 0)) // remembered, as lines meet again
   for (const p of people) count(p)
   const order = people.slice().sort((p, q) => q.ancestors - p.ancestors || (q.from || 0) - (p.from || 0))
-  for (const p of order) person(p, 0)
+  // someone not reached yet (a second spouse, say) goes in the generation of their spouse, or above their children
+  const rowOf = p => {
+    const spouse = p.unions.map(u => byId[u.spouse]).find(q => q && q.laid), child = p.children.map(id => byId[id]).find(q => q.laid)
+    return spouse ? spouse.row : child ? child.row - 1 : 0
+  }
+  for (const p of order) person(p, rowOf(p))
+  const rows = {}
+  for (const p of people) (rows[p.row] = rows[p.row] || []).push(p)
+  const levels = Object.keys(rows).map(Number).sort((a, b) => a - b).map(r => rows[r].sort((p, q) => p.x - q.x))
+  // fewer crossings: sweeping down then up, each generation is reordered by where their parents (down) or children (up) stand,
+  // a couple moving as one (barycentre method). Kept only if it crosses less
+  const crossings = () => {
+    let n = 0
+    for (const row of levels) {
+      const ends = row.flatMap(p => parents(p).map(q => [q.x, p.x]))
+      for (let i = 0; i < ends.length; i++) for (let j = i + 1; j < ends.length; j++) if ((ends[i][0] - ends[j][0]) * (ends[i][1] - ends[j][1]) < 0) n++
+    }
+    return n
+  }
+  let best = crossings(), kept = people.map(p => p.x)
+  for (let sweep = 0; sweep < 24; sweep++) for (const row of sweep % 2 ? levels.slice().reverse() : levels) {
+    const units = [], unitOf = new Map()
+    for (const p of row) if (!unitOf.has(p)) {
+      const unit = [p]
+      unitOf.set(p, unit)
+      for (let i = 0; i < unit.length; i++) for (const u of unit[i].unions) {
+        const s = byId[u.spouse]
+        if (s && s.row == p.row && !unitOf.has(s)) { unitOf.set(s, unit); unit.push(s) }
+      }
+      units.push(unit)
+    }
+    for (const unit of units) {
+      const near = unit.flatMap(p => sweep % 2 ? p.children.map(id => byId[id]) : parents(p))
+      unit.key = near.length ? near.reduce((s, q) => s + q.x, 0) / near.length : unit.reduce((s, p) => s + p.x, 0) / unit.length
+    }
+    units.sort((a, b) => a.key - b.key)
+    row.length = 0
+    for (const unit of units) row.push(...unit)
+    row.forEach((p, i) => p.x = i)
+    const n = crossings()
+    if (n < best) { best = n; kept = people.map(p => p.x) }
+  }
+  people.forEach((p, i) => p.x = kept[i])
+  for (const row of levels) row.sort((p, q) => p.x - q.x)
   // that packs every generation as tight as it goes, so the widest one, far up, pushes the two sides apart all the way down.
   // So then, keeping each generation's order, sweep up and down moving everyone towards the middle of their children (the
   // childless: of their parents), as close as they can get while staying a slot apart (least squares, by pool-adjacent-violators):
   // each generation only as wide as it needs, so the tree opens up as the generations grow
-  const rows = {}
-  for (const p of people) (rows[p.row] = rows[p.row] || []).push(p)
-  const levels = Object.keys(rows).map(Number).sort((a, b) => a - b).map(r => rows[r].sort((p, q) => p.x - q.x))
   const kin = p => { const kids = p.children.map(id => byId[id]).filter(q => q.row > p.row); return kids.length ? kids : parents(p).filter(q => q.row < p.row) }
   for (let sweep = 0; sweep < 60; sweep++) for (const row of sweep % 2 ? levels.slice().reverse() : levels) {
     const blocks = [] // runs of people pushed against each other: x = their shared offset + their index
@@ -302,40 +347,48 @@ function layTree() {
     const parent = parents(p).find(q => q.treeYear != null)
     p.treeYear = spouse ? spouse.treeYear : child ? child.treeYear - 30 : parent ? parent.treeYear + 30 : null
   }
-  for (const p of people) if (p.treeYear != null) p.node = [-p.treeYear * YEAR, p.x * SLOT]
-  treeHome = order.find(p => p.node).node[1]
+  for (const p of people) {
+    p.genNode = [-p.row * GEN, p.x * SLOT]
+    if (p.treeYear != null) p.yearNode = [-p.treeYear * YEAR, p.x * SLOT]
+  }
+  treeHome = order[0]
 }
 
-// tree button: switch between the world map and the tree; the selected person is centred on the other side,
-// otherwise each side comes back where it was left
+// tree button and 📅: switch views (world map, tree by generation, tree by year); the selected person is centred in the new one,
+// otherwise each comes back where it was left
 let views = {}
+const view = () => !tree ? "map" : byYear ? "years" : "gens"
 function toggleTree() {
-  if (!mapReady || !people.length) return
-  if (tree) views.tree = map.getCenter().lng
-  else views.map = { center: map.getCenter(), zoom: map.getZoom() }
+  switchView(() => tree = !tree)
+}
+function switchView(change) {
+  if (!mapReady || !people.length) return change()
+  views[view()] = { center: map.getCenter(), zoom: map.getZoom() }
   const year = center()
-  tree = !tree
+  change()
+  const now = view()
   treeToggle.classList.toggle("on", tree)
   document.body.classList.toggle("tree", tree)
+  document.body.classList.toggle("gens", now == "gens")
   sizeTrack()
   scrollWheel((year - first) * ppy)
   drawRuler()
   for (const id of baseLayers) map.setLayoutProperty(id, "visibility", tree ? "none" : "visible")
   map.setLayoutProperty("names", "visibility", tree ? "visible" : "none")
   syncing = true // the zoom limits can move the map: not the timeline's business
-  map.setMinZoom(tree ? zoomOf(60 / (last - first)) : null)
-  map.setMaxZoom(tree ? zoomOf(60) : 18)
+  map.setMinZoom(now == "years" ? zoomOf(60 / (last - first)) : null)
+  map.setMaxZoom(now == "years" ? zoomOf(60) : 18)
   syncing = false
-  const s = selected && spot(selected)
-  if (tree) {
+  const s = (selected && spot(selected)) || (tree && !views[now] && spot(treeHome))
+  if (now == "years") {
     if (s) {
       flight++
       scrollWheel((-s[0] / YEAR - first) * ppy)
     }
-    syncMap(s ? s[1] : views.tree ?? treeHome)
+    syncMap(s ? s[1] : views.years ? views.years.center.lng : treeHome.genNode[1])
   }
-  else if (s) map.jumpTo({ center: [s[1], s[0]], zoom: views.map.zoom })
-  else map.jumpTo(views.map)
+  else if (s) map.jumpTo({ center: [s[1], s[0]], zoom: views[now] ? views[now].zoom : 14 })
+  else map.jumpTo(views[now])
   draw()
 }
 
@@ -350,7 +403,7 @@ function syncMap(lng = map.getCenter().lng) {
   syncing = false
 }
 function followMap() {
-  if (!tree || syncing) return
+  if (!synced() || syncing) return
   flight++
   ppy = YEAR * 512 * 2 ** map.getZoom() / 360
   sizeTrack()
@@ -365,7 +418,7 @@ function buildWheel() {
 
 wheel.onscroll = () => {
   drawRuler()
-  if (tree) syncMap()
+  if (synced()) syncMap()
   const half = Math.floor(30 / ppy), y = Math.round(center())
   if (from != y - half || to != y + half) draw()
 }
@@ -763,7 +816,8 @@ function drawMenu() {
       + option(show.children, "children", "🧒", "Afficher les enfants")
       + option(ancestors, "ancestors", "🌳", "Afficher les ancêtres")
       + option(everyone, "everyone", "👥", "Afficher tout le monde")
-      + option(links, "links", "🔗", "Afficher les liens") : "")
+      + option(links, "links", "🔗", "Afficher les liens")
+      + option(byYear, "byYear", "📅", "Arbre selon les années") : "")
 }
 
 // ? button: what the map and timeline marks mean; it and the … menu close each other
@@ -812,6 +866,7 @@ function toggle(key) {
   if (key == "ancestors") ancestors = !ancestors
   else if (key == "everyone") everyone = !everyone
   else if (key == "links") links = !links
+  else if (key == "byYear") switchView(() => byYear = !byYear)
   else show[key] = !show[key]
   refresh()
 }
@@ -895,7 +950,7 @@ function focusOn(id) {
 
 // map click: the timeline glides to their birth (death if no birth), at the same timeline zoom; the map stays
 function pickOnMap(p) {
-  travel(tree ? p.treeYear : p.from || (p.death && p.death.year), null, true)
+  travel(synced() ? p.treeYear : p.from || (p.death && p.death.year), null, true)
   select(p)
 }
 
@@ -906,13 +961,13 @@ const ease = t => t < 0.5 ? 4 * t ** 3 : 1 - (2 - 2 * t) ** 3 / 2
 // the timeline does the same in step, zooming out until both years fit (unless keepZoom), so the jump's size shows on both.
 // In the tree, the timeline carries the map up or down, and across follows in step
 function travel(y, lngLat, keepZoom) {
-  if (tree && lngLat) y = -lngLat[1] / YEAR
-  const lng0 = tree ? map.getCenter().lng : 0, lng1 = tree && lngLat ? lngLat[0] : lng0
+  if (synced() && lngLat) y = -lngLat[1] / YEAR
+  const lng0 = synced() ? map.getCenter().lng : 0, lng1 = synced() && lngLat ? lngLat[0] : lng0
   const w = along(wheel), y0 = center(), dy = y ? Math.abs(y - y0) : 0
   const px = lngLat && mapReady ? map.project(lngLat).dist(map.project(map.getCenter())) : 0
-  const dz = lngLat && mapReady && !tree ? Math.abs(12 - map.getZoom()) : 0
+  const zoom = tree ? map.getZoom() : 12, dz = lngLat && mapReady && !synced() ? Math.abs(zoom - map.getZoom()) : 0
   const duration = Math.min(3000, 600 + 700 * Math.max(Math.log2(1 + px / w) + dz / 4, Math.log2(1 + dy * ppy / w)))
-  if (lngLat && mapReady && !tree) map.flyTo({ center: lngLat, zoom: 12, duration, easing: ease })
+  if (lngLat && mapReady && !synced()) map.flyTo({ center: lngLat, zoom, duration, easing: ease })
   if (!y) return
   const id = ++flight, ppy0 = ppy, start = performance.now()
   const far = keepZoom ? ppy0 : Math.max(60 / (last - first), Math.min(ppy0, 0.6 * w / Math.max(1, dy)))
@@ -922,7 +977,7 @@ function travel(y, lngLat, keepZoom) {
     ppy = t < 1 ? ppy0 * (far / ppy0) ** Math.sin(Math.PI * t) : ppy0
     sizeTrack()
     scrollWheel((y0 + (y - y0) * ease(t) - first) * ppy)
-    if (tree) syncMap(lng0 + (lng1 - lng0) * ease(t))
+    if (synced()) syncMap(lng0 + (lng1 - lng0) * ease(t))
     if (t < 1) return requestAnimationFrame(step)
     drawRuler()
     draw()
