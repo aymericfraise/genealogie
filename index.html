@@ -31,9 +31,10 @@
   .buttons button.on { background: #c9d8f2; }
   .buttons .info { flex: 1; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; font-size: 14px; }
   .buttons[hidden] { display: none; }
-  #more { position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
+  #more { position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   #more button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font-size: 18px; }
   #more button.on { background: #c9d8f2; }
+  #more button.option { display: flex; gap: 8px; width: auto; padding: 0 14px 0 9px; font: 15px system-ui, -apple-system, sans-serif; }
   #relatives { max-height: 80vh; overflow: hidden; margin-left: -10px; padding-left: 10px; transition: max-height 0.3s; } /* room on the left for the stamps */
   #relatives.collapsed { max-height: 0; }
   .row { padding: 6px 10px; background: white; cursor: pointer; }
@@ -542,11 +543,15 @@ function select(p) {
 // … button, top right: which relatives are listed under the card, and 🌳 ancestors
 function drawMenu() {
   more.innerHTML = `<button onclick="menuOpen = !menuOpen; drawMenu()">${ICONS.more}</button>`
-    + (menuOpen ? `<button class="${show.unions ? "on" : ""}" onclick="toggle('unions')">💍</button>`
-      + `<button class="${show.parents ? "on" : ""}" onclick="toggle('parents')">👪</button>`
-      + `<button class="${show.children ? "on" : ""}" onclick="toggle('children')">🧒</button>`
-      + `<button class="${ancestors ? "on" : ""}" onclick="toggle('ancestors')">🌳</button>`
-      + `<button class="${everyone ? "on" : ""}" onclick="toggle('everyone')">👥</button>` : "")
+    + (menuOpen ? option(show.unions, "unions", "💍 Afficher les unions")
+      + option(show.parents, "parents", "👪 Afficher les parents")
+      + option(show.children, "children", "🧒 Afficher les enfants")
+      + option(ancestors, "ancestors", "🌳 Afficher les ancêtres")
+      + option(everyone, "everyone", "👥 Afficher tout le monde") : "")
+}
+
+function option(on, key, text) {
+  return `<button class="option ${on ? "on" : ""}" onclick="toggle('${key}')">${text}</button>`
 }
 
 function refresh() {
