@@ -598,15 +598,12 @@ function place() {
   const lines = [], dots = [], dim = [], trail = []
   const linked = new Set(tree ? shown : shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
   const out = p => !tree && !inRange(p)
-  const eldest = {} // tree: earliest child of each couple (highest up), where their bar stands
-  if (tree) for (const p of linked) eldest[p.father + "," + p.mother] = Math.max(eldest[p.father + "," + p.mother] ?? -Infinity, p.pos[1])
   for (const p of linked) {
     const ps = [byId[p.father], byId[p.mother]].filter(q => linked.has(q))
     if (tree && ps.length) {
-      // tree: one line from the middle of the parents, down to a bar halfway to their eldest child, along it, and down to the child
+      // tree: one straight line from the middle of the parents to the child (bars at a shared height ran into each other)
       const top = [ps.reduce((s, q) => s + q.pos[0], 0) / ps.length, ps.reduce((s, q) => s + q.pos[1], 0) / ps.length]
-      const bar = (top[1] + eldest[p.father + "," + p.mother]) / 2
-      lines.push(feature("LineString", [top, [top[0], bar], [p.pos[0], bar], p.pos], { kind: "parent", dim: false }))
+      lines.push(feature("LineString", [top, p.pos], { kind: "parent", dim: false }))
     }
     else for (const q of ps) if (links) lines.push(feature("LineString", [q.pos, p.pos], { kind: "parent", dim: out(p) || out(q) }))
     for (const u of p.unions) {
