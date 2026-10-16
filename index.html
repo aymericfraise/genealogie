@@ -591,9 +591,16 @@ function place() {
     ;(cells[cx + "," + cy] = cells[cx + "," + cy] || []).push(p)
     ;(fine[fx + "," + fy] = fine[fx + "," + fy] || []).push(p)
   }
+  for (const p of shown) p.size = size.get(p.root)
+  settle()
+  paintLists()
+}
+
+// cards gliding to their place, a third of the way each frame: only the shown spots move, the anchors stay
+function settle() {
   let moving = false
   for (const p of shown) {
-    const n = size.get(p.root), card = p.rank == 0 ? 0 : p.rank == 1 ? 1 : n <= 10 ? 1 : 2 // 0 front, 1 and 2 behind
+    const n = p.size, card = p.rank == 0 ? 0 : p.rank == 1 ? 1 : n <= 10 ? 1 : 2 // 0 front, 1 and 2 behind
     if (!placed.has(p)) p.card = card
     p.card += (card - p.card) / 3
     if (Math.abs(card - p.card) > 0.01) moving = true
@@ -608,7 +615,10 @@ function place() {
   }
   placed = new Set(shown)
   cancelAnimationFrame(settling)
-  settling = moving ? requestAnimationFrame(() => { laidZoom = null; map.triggerRepaint() }) : 0
+  settling = moving ? requestAnimationFrame(() => { settle(); map.triggerRepaint() }) : 0
+}
+
+function paintLists() {
   // lines join people in the years or in 🌳 (not the light gray ones); a line is faded when either end is outside the years.
   // The tree has no period: all its lines, between everyone, never faded
   lines = []
