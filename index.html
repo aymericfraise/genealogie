@@ -39,7 +39,7 @@
   #relatives { max-height: 80vh; overflow: hidden; transition: max-height 0.3s; }
   #relatives.collapsed { max-height: 0; }
   .row { margin-bottom: 4px; padding: 6px 10px; border-radius: 10px; background: white; box-shadow: 0 1px 4px #0002; cursor: pointer; transition: opacity 0.3s; }
-  .ghost { position: fixed; z-index: 2000; margin: 0; box-sizing: border-box; transition: all 0.3s; }
+  .ghost { position: fixed; z-index: 2000; margin: 0; box-sizing: border-box; }
   .appear { animation: appear 0.3s; }
   @keyframes appear { from { opacity: 0; } }
   #panel { max-height: 0; overflow-y: auto; padding: 0 12px; border-radius: 12px; background: white; transition: max-height 0.3s; }
@@ -285,6 +285,9 @@ function draw() {
 // Each icon leans on its anchor, the nearest icon before it within 12px. Zooming scales every distance alike, so anchors never
 // change while they matter, and the pull is a function of the distance alone: none at 12px, full under 4px. So joining and
 // leaving follow the zoom exactly; only the card an icon sits on (when a group passes 2 or 10) glides, a third of the way each frame.
+// Known jank: setData rebuilds the sources in MapLibre's worker, so while zooming the icons, lines and ring show a frame or more
+// late and drift around the fixed place dots. Drawing all of this on our own canvas over the map, on each MapLibre "render",
+// would make it exact, at the cost of a rewrite and hand-made click hit-testing.
 let placed = new Set(), settling = 0
 function place() {
   const scale = 512 * 2 ** map.getZoom(), cells = {}, size = new Map() // cells: icons by 12px square, to only look at the 9 around
@@ -544,32 +547,31 @@ function toggle(key) {
   refresh()
 }
 
-// drawer pull, all at once: a copy of the clicked line slides down and grows into the person card, still copies of the old
-// card and list fade out, and the new person's relatives slide up out of the card
+// drawer pull, all at once and in step: a copy of the clicked line slides down and grows into the person card; the old list
+// (a still copy) slides down with it while fading, as does the new person's list, coming down from above; the old card fades
 function pick(el, id) {
-  const from = el.getBoundingClientRect(), to = summary.getBoundingClientRect()
+  const from = el.getBoundingClientRect(), to = summary.getBoundingClientRect(), shift = to.top - from.top
+  const motion = { duration: 300, easing: "ease" }
   const ghost = el.cloneNode(true)
   ghost.firstChild.textContent = { M: "♂", F: "♀" }[byId[id].sex] || "" // the card has ♂/♀ instead of the relation emoji
   ghost.className = "row line ghost"
-  Object.assign(ghost.style, { left: from.left + "px", top: from.top + "px", width: from.width + "px", height: from.height + "px" })
+  document.body.append(ghost)
+  ghost.animate([
+    { left: from.left + "px", top: from.top + "px", width: from.width + "px", height: from.height + "px" },
+    { left: to.left + "px", top: to.top + "px", width: to.width + "px", height: to.height + "px", padding: "8px 10px", borderRadius: "12px" },
+  ], { ...motion, fill: "forwards" })
   for (const e of [relatives, summary]) {
     const r = e.getBoundingClientRect(), copy = e.cloneNode(true)
     copy.removeAttribute("id")
     Object.assign(copy.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", margin: 0, zIndex: 1999, pointerEvents: "none" })
     if (e == relatives) copy.children[[...relatives.children].indexOf(el)].style.visibility = "hidden" // the moving copy replaces it
     document.body.append(copy)
-    copy.animate([{ opacity: 1 }, { opacity: 0 }], 300).onfinish = () => copy.remove()
+    const down = e == relatives ? shift : 0
+    copy.animate([{ opacity: 1, transform: "none" }, { opacity: 0, transform: `translateY(${down}px)` }], motion).onfinish = () => copy.remove()
   }
-  document.body.append(ghost)
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    Object.assign(ghost.style, { left: to.left + "px", top: to.top + "px", width: to.width + "px", height: to.height + "px", padding: "8px 10px", borderRadius: "12px" })
-  }))
   focusOn(id)
   summary.style.visibility = "hidden" // until the moving copy lands on it
-  for (const r of relatives.children) {
-    const dy = to.top - r.getBoundingClientRect().top
-    r.animate([{ transform: `translateY(${dy}px)`, opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 300, easing: "ease-out" })
-  }
+  relatives.animate([{ opacity: 0, transform: `translateY(${-shift}px)` }, { opacity: 1, transform: "none" }], motion)
   setTimeout(() => {
     ghost.remove()
     summary.style.visibility = ""
