@@ -18,7 +18,8 @@
   #range { position: fixed; left: calc(50% - 30px); bottom: 0; width: 60px; height: 80px; box-sizing: border-box; border: 2px solid #333; border-top: 0; pointer-events: none; } /* the years under it are the ones shown */
   #needle { position: fixed; left: 50%; bottom: 56px; transform: translateX(-50%); min-width: 60px; padding: 2px 6px; box-sizing: border-box; text-align: center; white-space: nowrap; border-radius: 8px; background: #333; color: white; font: bold 15px system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; pointer-events: none; }
   #card { position: fixed; left: 10px; bottom: 90px; width: min(340px, calc(100% - 20px)); z-index: 1000; font: 16px system-ui, -apple-system, sans-serif; }
-  #summary { padding: 8px 10px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; }
+  #summary { position: relative; padding: 8px 10px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; }
+  #card.wed #summary { border-top: 1px solid #eee; border-top-left-radius: 0; border-top-right-radius: 0; } /* spouses' block sits on the card, 💍 on the seam */
   .line { display: flex; gap: 8px; white-space: nowrap; }
   .sex { flex: 0 0 22px; height: 22px; box-sizing: border-box; border: 2px solid gray; border-radius: 999px; text-align: center; line-height: 18px; color: gray; }
   .sex.M { border-color: #2f6fd6; color: #2f6fd6; }
@@ -39,6 +40,7 @@
   .group { position: relative; margin-bottom: 4px; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px #0002; } /* parents, spouses, or one child: lines joined into one block */
   .group .row + .row { border-top: 1px solid #eee; }
   .stamp-wrap { position: relative; }
+  .stamp-wrap.wed .group { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
   .stamp { position: absolute; left: -10px; top: 50%; transform: translateY(-50%); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 999px; background: white; box-shadow: 0 1px 3px #0003; font-size: 13px; pointer-events: none; } /* relation emoji, on the left edge, across the seam */
   .ghost { position: fixed; z-index: 2000; margin: 0; box-sizing: border-box; }
   .appear { animation: appear 0.3s; }
@@ -508,8 +510,11 @@ function row(id) {
 }
 
 // lines joined into one block, with the relation emoji as a stamp on its left edge, halfway down
+// (spouses, with the list showing: no stamp here, the block sits on the person card, which carries 💍 on its top edge)
 function block(icon, rows) {
-  return rows.join("") ? `<div class="stamp-wrap"><div class="group">${rows.join("")}</div><span class="stamp">${icon}</span></div>` : ""
+  if (!rows.join("")) return ""
+  return icon ? `<div class="stamp-wrap"><div class="group">${rows.join("")}</div><span class="stamp">${icon}</span></div>`
+    : `<div class="stamp-wrap wed"><div class="group">${rows.join("")}</div></div>`
 }
 
 // map click: person card (bottom) with relatives listed above it; the chevron opens the details
@@ -517,14 +522,16 @@ function select(p) {
   selected = p
   card.hidden = false
   const marriages = p.unions.map(u => u.year).filter(y => y)
-  summary.innerHTML = `<div class="line">${line(p)}</div><div class="buttons">`
+  const wed = show.unions && p.unions.some(u => byId[u.spouse]) && !panel.classList.contains("open")
+  card.classList.toggle("wed", wed)
+  summary.innerHTML = (wed ? `<span class="stamp" style="top: 0">💍</span>` : "") + `<div class="line">${line(p)}</div><div class="buttons">`
     + `<span class="info">${p.occupation ? "🛠️ " + p.occupation + " " : ""}${marriages.length ? "💍 " + marriages.join(", ") : ""}</span>`
     + `<button onclick="panel.classList.toggle('open'); select(selected)">${panel.classList.contains("open") ? ICONS.up : ICONS.right}</button>`
     + `<button onclick="unselect()">${ICONS.close}</button></div>`
   drawMenu()
   relatives.innerHTML = (show.children ? p.children.map(id => block("🧒", [row(id)])).join("") : "")
     + (show.parents ? block("👪", [row(p.father), row(p.mother)]) : "")
-    + (show.unions ? block("💍", p.unions.map(u => row(u.spouse))) : "")
+    + (show.unions ? block(wed ? "" : "💍", p.unions.map(u => row(u.spouse))) : "")
   if (panel.classList.contains("open")) details()
   relatives.classList.toggle("collapsed", panel.classList.contains("open")) // details replace the relatives list, both slide at once
   draw()
