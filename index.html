@@ -188,7 +188,6 @@ function start(list) {
     byId[p.id] = p
     p.children = []
     p.from = p.birth && p.birth.year
-    p.to = (p.death && p.death.year) || p.from + 80
     const place = [p.birth, p.death].find(e => e && e.lat != null)
     if (place) p.place = [place.lat, place.lon]
   }
@@ -203,7 +202,16 @@ function start(list) {
     }
   }
 
-  treeYears()
+  // no birth year: estimated from their spouse's, 30 years before a dated child's, 30 after a dated parent's, or 60 before
+  // their death; with none of these, no dates, so never in the period (the card still shows "?")
+  for (let pass = 0; pass < 5; pass++) for (const p of people) if (p.from == null) {
+    const spouse = p.unions.map(u => byId[u.spouse]).find(q => q && q.from != null)
+    const child = p.children.map(id => byId[id]).find(q => q.from != null)
+    const parent = [byId[p.father], byId[p.mother]].find(q => q && q.from != null)
+    const death = p.death && p.death.year
+    p.from = spouse ? spouse.from : child ? child.from - 30 : parent ? parent.from + 30 : death ? death - 60 : undefined
+  }
+  for (const p of people) p.to = p.from == null ? undefined : (p.death && p.death.year) || p.from + 80
   min = Math.min(...people.filter(p => p.from).map(p => p.from))
   console.log(people.length, "people,", people.filter(p => p.from).length, "with birth year,", people.filter(p => p.place).length, "with place, first year", min)
   buildWheel()
@@ -363,18 +371,7 @@ function layTree(root) {
   }
   for (const p of list) {
     p.genNode = [-p.row * GEN, p.x * SLOT]
-    if (p.treeYear != null) p.yearNode = [-p.treeYear * YEAR, p.x * SLOT]
-  }
-}
-
-// no birth year, for the tree by year: their spouse's, 30 years before a dated child's, or 30 after a dated parent's; with none of these, left out
-function treeYears() {
-  for (const p of people) p.treeYear = p.from
-  for (let pass = 0; pass < 5; pass++) for (const p of people) if (p.treeYear == null) {
-    const spouse = p.unions.map(u => byId[u.spouse]).find(q => q && q.treeYear != null)
-    const child = p.children.map(id => byId[id]).find(q => q.treeYear != null)
-    const parent = [byId[p.father], byId[p.mother]].find(q => q && q.treeYear != null)
-    p.treeYear = spouse ? spouse.treeYear : child ? child.treeYear - 30 : parent ? parent.treeYear + 30 : null
+    if (p.from != null) p.yearNode = [-p.from * YEAR, p.x * SLOT]
   }
 }
 
@@ -972,17 +969,17 @@ function details() {
     + (p.death ? `<p><b>✝️ Décès</b>${when(p.death)}</p>` : "")
 }
 
-// person link: go to their birth (year, or death year if none, and place)
+// person link: go to their birth (year, estimated if unknown, and place)
 function focusOn(id) {
   const p = byId[id]
   const s = spot(p)
-  travel(p.from || (p.death && p.death.year), s && [s[1], s[0]])
+  travel(p.from, s && [s[1], s[0]])
   select(p)
 }
 
-// map click: the timeline glides to their birth (death if no birth), at the same timeline zoom; the map stays
+// map click: the timeline glides to their birth (estimated if unknown), at the same timeline zoom; the map stays
 function pickOnMap(p) {
-  travel(synced() ? p.treeYear : p.from || (p.death && p.death.year), null, true)
+  travel(p.from, null, true)
   select(p)
 }
 
