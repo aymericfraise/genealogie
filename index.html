@@ -34,7 +34,9 @@
   #more { position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
   #more button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font-size: 18px; }
   #more button.on { background: #c9d8f2; }
-  #help { position: fixed; top: 10px; right: 52px; z-index: 1000; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font: bold 18px system-ui, -apple-system, sans-serif; }
+  #help, #treeToggle { position: fixed; top: 10px; right: 52px; z-index: 1000; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font: bold 18px system-ui, -apple-system, sans-serif; }
+  #treeToggle { right: 94px; display: grid; place-items: center; }
+  #treeToggle.on { background: #c9d8f2; }
   #legend { position: fixed; top: 54px; right: 10px; z-index: 1000; width: min(300px, calc(100% - 20px)); max-height: calc(100% - 160px); overflow-y: auto; box-sizing: border-box; padding: 6px 12px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; font: 14px system-ui, -apple-system, sans-serif; }
   #legend p { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
   #legend p > :first-child { flex: 0 0 34px; display: grid; place-items: center; }
@@ -76,6 +78,7 @@
 <div id="range"></div>
 <div id="needle"></div>
 <div id="more"></div>
+<button id="treeToggle" onclick="toggleTree()"></button>
 <button id="help" onclick="toggleLegend()">?</button>
 <div id="legend" hidden></div>
 <div id="card" hidden>
@@ -94,11 +97,15 @@ let everyone = true // 👥: people outside the years are on the map too, in lig
 let links = false // 🔗: parent–child and union lines on the map
 let shown = [] // people on the map
 const inRange = p => p.from <= to && from <= p.to
+let tree = false // tree button: the map shows the full tree instead of the world, on a blank background
+const spot = p => tree ? p.node : p.place // [lat, lon] on the current view
+const near = () => tree ? 16 : 12 // zoom when going to a person
 
 // MapLibre map on OpenFreeMap (free, no account), keeping only nature, water, town names and borders: no roads, rails or buildings
-let map = null, mapReady = false
+let map = null, mapReady = false, baseLayers = []
 fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(style => {
   style.layers = style.layers.filter(l => /^(background|natural_earth|landcover|landuse_residential|water|label_village|label_town|label_city|label_other|boundary_2|boundary_3)/.test(l.id))
+  baseLayers = style.layers.map(l => l.id).filter(id => id != "background") // hidden in the tree
   map = new maplibregl.Map({ container: "map", style, center: [2.5, 46.5], zoom: 5, maxZoom: 18 })
   map.on("load", () => {
     const empty = { type: "FeatureCollection", features: [] }
@@ -113,6 +120,10 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
     map.addLayer({ id: "dim", type: "symbol", source: "dim", layout: icons })
     map.addLayer({ id: "trail-line", type: "line", source: "trail", filter: ["==", ["get", "kind"], "path"], paint: { "line-color": "black", "line-width": 2, "line-dasharray": [3, 3] } })
     map.addLayer({ id: "people", type: "symbol", source: "people", layout: icons })
+    // names under the figures, in the tree only
+    const names = { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-anchor": "top", "text-offset": [0, 1.2], "text-max-width": 7, visibility: "none" }
+    map.addLayer({ id: "people-names", type: "symbol", source: "people", layout: names, paint: { "text-halo-color": "white", "text-halo-width": 2 } })
+    map.addLayer({ id: "dim-names", type: "symbol", source: "dim", layout: names, paint: { "text-color": "gray", "text-halo-color": "white", "text-halo-width": 2 } })
     map.addLayer({ id: "trail-stops", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "stop"],
       paint: { "circle-color": "white", "circle-radius": 2, "circle-stroke-color": "black", "circle-stroke-width": 2 } })
     map.addLayer({ id: "trail-labels", type: "symbol", source: "trail", filter: ["==", ["get", "kind"], "stop"],
@@ -176,6 +187,7 @@ function start(list) {
     }
   }
 
+  layTree()
   min = Math.min(...people.filter(p => p.from).map(p => p.from))
   console.log(people.length, "people,", people.filter(p => p.from).length, "with birth year,", people.filter(p => p.place).length, "with place, first year", min)
   buildWheel()
@@ -198,6 +210,53 @@ function start(list) {
     drag = null
   }
   setYear(last)
+}
+
+// full tree: each person with their spouses side by side, their children's families below, parents centred over their children.
+// x: slots handed out left to right as families are laid out; y: generations. Someone married into the family sits by their
+// spouse, so their own parents end up elsewhere, joined by a long line.
+const SLOT = 0.001, GEN = 0.0015 // degrees, near 0,0 where the map is not stretched
+function layTree() {
+  let next = 0
+  const lay = (p, depth) => {
+    const group = [p, ...p.unions.map(u => byId[u.spouse]).filter(s => s && s.depth == null)]
+    for (const q of group) q.depth = depth
+    const kids = [...new Set(group.flatMap(q => q.children))].map(id => byId[id]).filter(k => k.depth == null).sort((a, b) => (a.from || 9999) - (b.from || 9999))
+    const start = next
+    for (const k of kids) if (k.depth == null) lay(k, depth + 1)
+    const mid = next - start >= group.length ? (start + next - 1) / 2 : start + (group.length - 1) / 2
+    next = Math.max(next, start + group.length)
+    group.forEach((q, i) => q.node = [-depth * GEN, (mid - (group.length - 1) / 2 + i) * SLOT])
+  }
+  // first the people with no known parents and no spouse with known parents, oldest first; then whoever is left
+  // (a person whose children are already laid out goes one generation above them)
+  const hasParents = p => byId[p.father] || byId[p.mother]
+  const roots = people.filter(p => !hasParents(p) && !p.unions.some(u => byId[u.spouse] && hasParents(byId[u.spouse])))
+  for (const p of [...roots.sort((a, b) => (a.from || 9999) - (b.from || 9999)), ...people]) if (p.depth == null) {
+    const laid = p.children.map(id => byId[id]).filter(k => k.depth != null)
+    lay(p, laid.length ? Math.min(...laid.map(k => k.depth)) - 1 : 0)
+  }
+}
+
+// tree button: switch between the world map and the tree; the selected person is centred on the other side,
+// otherwise each side comes back where it was left
+let views = {}
+function toggleTree() {
+  if (!mapReady || !people.length) return
+  views[tree] = { center: map.getCenter(), zoom: map.getZoom() }
+  tree = !tree
+  treeToggle.classList.toggle("on", tree)
+  for (const id of baseLayers) map.setLayoutProperty(id, "visibility", tree ? "none" : "visible")
+  for (const id of ["people-names", "dim-names"]) map.setLayoutProperty(id, "visibility", tree ? "visible" : "none")
+  const s = selected && spot(selected)
+  if (s) map.jumpTo({ center: [s[1], s[0]], zoom: views[tree] ? views[tree].zoom : near() })
+  else if (views[tree]) map.jumpTo(views[tree])
+  else {
+    const bounds = new maplibregl.LngLatBounds()
+    for (const p of people) bounds.extend([p.node[1], p.node[0]])
+    map.fitBounds(bounds, { padding: 40, animate: false })
+  }
+  draw()
 }
 
 function buildWheel() {
@@ -298,17 +357,17 @@ function draw() {
     const add = p => { if (p) { lineage.add(p); add(byId[p.father]); add(byId[p.mother]) } }
     add(selected)
   }
-  shown = people.filter(p => p.place && (everyone || (lineage ? lineage.has(p) : inRange(p))))
+  shown = people.filter(p => spot(p) && (everyone || (lineage ? lineage.has(p) : inRange(p))))
   if (!mapReady) return
 
   // people at the same place sit on a small ring (15 m apart), visible once clustering stops
   const groups = {}
   for (const p of shown) {
-    groups[p.place] = groups[p.place] || []
-    groups[p.place].push(p)
+    groups[spot(p)] = groups[spot(p)] || []
+    groups[spot(p)].push(p)
   }
   for (const group of Object.values(groups)) {
-    const [lat, lon] = group[0].place
+    const [lat, lon] = spot(group[0])
     const meters = group.length == 1 ? 0 : group.length * 15 / (2 * Math.PI)
     group.forEach((p, i) => {
       const angle = 2 * Math.PI * i / group.length
@@ -369,25 +428,27 @@ function place() {
   placed = new Set(shown)
   cancelAnimationFrame(settling)
   settling = moving ? requestAnimationFrame(place) : 0
-  // lines join people in the years or in 🌳 (not the light gray ones); a line is faded when either end is outside the years
+  // lines join people in the years or in 🌳 (not the light gray ones); a line is faded when either end is outside the years.
+  // The tree always has its lines, between everyone shown
   const lines = [], dots = [], dim = [], trail = []
-  const linked = new Set(shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
+  const linked = new Set(tree ? shown : shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
   for (const p of linked) {
     for (const id of [p.father, p.mother]) {
-      if (links && linked.has(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
+      if ((links || tree) && linked.has(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
     }
     for (const u of p.unions) {
-      if (links && linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
+      if ((links || tree) && linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
     }
   }
   for (const p of shown) {
     const icon = { M: "man", F: "woman" }[p.sex] || "person"
-    if (inRange(p)) dots.push(feature("Point", p.pos, { id: p.id, icon }))
-    else dim.push(feature("Point", p.pos, { id: p.id, icon: (linked.has(p) ? "gray-" : "light-") + icon }))
+    const gray = tree ? lineage && lineage.has(p) : linked.has(p)
+    if (inRange(p)) dots.push(feature("Point", p.pos, { id: p.id, icon, name: p.name }))
+    else dim.push(feature("Point", p.pos, { id: p.id, icon: (gray ? "gray-" : "light-") + icon, name: p.name }))
   }
 
-  // selected person: black ring, and their life's places (white circles) joined by a dashed line in date order
-  if (selected) {
+  // selected person: black ring, and on the world map their life's places (white circles) joined by a dashed line in date order
+  if (selected && !tree) {
     const stops = selected.places.slice().sort((a, b) => (a.year || 9999) - (b.year || 9999))
     trail.push(feature("LineString", stops.map(s => [s.lon, s.lat]), { kind: "path" }))
     const labels = {}
@@ -397,8 +458,8 @@ function place() {
       labels[key] = labels[key] ? labels[key] + ", " + text : text
     }
     for (const key in labels) trail.push(feature("Point", key.split(",").map(Number), { kind: "stop", label: labels[key] }))
-    if (shown.includes(selected)) trail.push(feature("Point", selected.pos, { kind: "selected" }))
   }
+  if (selected && shown.includes(selected)) trail.push(feature("Point", selected.pos, { kind: "selected" }))
   map.getSource("lines").setData({ type: "FeatureCollection", features: lines })
   map.getSource("people").setData({ type: "FeatureCollection", features: dots })
   map.getSource("dim").setData({ type: "FeatureCollection", features: dim })
@@ -512,7 +573,9 @@ function goYear(y) {
   travel(y)
 }
 
+// from the tree, back to the world map first
 function goPlace(lat, lon) {
+  if (tree) toggleTree()
   travel(null, [lon, lat])
 }
 
@@ -532,7 +595,9 @@ const ICONS = {
   up: svg('<polyline points="5 15 12 8 19 15"/>'),
   down: svg('<polyline points="5 9 12 16 19 9"/>'),
   close: svg('<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>'),
+  tree: svg('<rect x="9" y="3" width="6" height="5"/><rect x="3" y="16" width="6" height="5"/><rect x="15" y="16" width="6" height="5"/><path d="M12 8v4M6 16v-4h12v4"/>'),
 }
+treeToggle.innerHTML = ICONS.tree
 
 // one line: "Prénom NOM…  1750–1802", after ♂/♀ in a ring of the person's sex colour
 function line(p) {
@@ -704,7 +769,8 @@ function details() {
 // person link: go to their birth (year, or death year if none, and place)
 function focusOn(id) {
   const p = byId[id]
-  travel(p.from || (p.death && p.death.year), p.place && [p.place[1], p.place[0]])
+  const s = spot(p)
+  travel(p.from || (p.death && p.death.year), s && [s[1], s[0]])
   select(p)
 }
 
@@ -722,9 +788,9 @@ const ease = t => t < 0.5 ? 4 * t ** 3 : 1 - (2 - 2 * t) ** 3 / 2
 function travel(y, lngLat, keepZoom) {
   const w = wheel.clientWidth, y0 = center(), dy = y ? Math.abs(y - y0) : 0
   const px = lngLat && mapReady ? map.project(lngLat).dist(map.project(map.getCenter())) : 0
-  const dz = lngLat && mapReady ? Math.abs(12 - map.getZoom()) : 0
+  const dz = lngLat && mapReady ? Math.abs(near() - map.getZoom()) : 0
   const duration = Math.min(3000, 600 + 700 * Math.max(Math.log2(1 + px / w) + dz / 4, Math.log2(1 + dy * ppy / w)))
-  if (lngLat && mapReady) map.flyTo({ center: lngLat, zoom: 12, duration, easing: ease })
+  if (lngLat && mapReady) map.flyTo({ center: lngLat, zoom: near(), duration, easing: ease })
   if (!y) return
   const id = ++flight, ppy0 = ppy, start = performance.now()
   const far = keepZoom ? ppy0 : Math.max(60 / (last - first), Math.min(ppy0, 0.6 * w / Math.max(1, dy)))
