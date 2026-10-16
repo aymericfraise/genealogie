@@ -74,8 +74,9 @@ let people = [], byId = {}, min = 0, selected = null
 let ppy = 5, first = 0, last = new Date().getFullYear() // timeline: pixels per year (dragging up/down changes it), first and last year
 let from = 0, to = 0 // years under the 60px range in the middle: people alive at any point in them are shown
 let counts = [] // people alive each year, drawn behind the timeline
-let ancestors = true // 🌳: with someone selected, the map shows only them and their ancestors
+let ancestors = true // 🌳: with someone selected, their ancestors are on the map whatever the years (gray outside them)
 let lineage = null // those people (outside the range faded), or null
+let everyone = true // 👥: people outside the years are on the map too, in light gray
 let shown = [] // people on the map
 const inRange = p => p.from <= to && from <= p.to
 
@@ -98,7 +99,7 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
     map.addLayer({ id: "trail-line", type: "line", source: "trail", filter: ["==", ["get", "kind"], "path"], paint: { "line-color": "black", "line-width": 2, "line-dasharray": [3, 3] } })
     map.addLayer({ id: "people", type: "symbol", source: "people", layout: icons })
     map.addLayer({ id: "trail-stops", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "stop"],
-      paint: { "circle-color": "white", "circle-radius": 8, "circle-stroke-color": "black", "circle-stroke-width": 2 } })
+      paint: { "circle-color": "white", "circle-radius": 2, "circle-stroke-color": "black", "circle-stroke-width": 2 } })
     map.addLayer({ id: "trail-labels", type: "symbol", source: "trail", filter: ["==", ["get", "kind"], "stop"],
       layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Regular"], "text-size": 13, "text-anchor": "left", "text-offset": [1, 0], "text-allow-overlap": true },
       paint: { "text-halo-color": "white", "text-halo-width": 2 } })
@@ -251,7 +252,7 @@ function draw() {
     const add = p => { if (p) { lineage.add(p); add(byId[p.father]); add(byId[p.mother]) } }
     add(selected)
   }
-  shown = people.filter(p => p.place && (lineage ? lineage.has(p) : inRange(p)))
+  shown = people.filter(p => p.place && (everyone || (lineage ? lineage.has(p) : inRange(p))))
   console.log("years", from, to, ":", shown.length, "on map")
   if (!mapReady) return
 
@@ -280,12 +281,17 @@ function draw() {
 // Everyone glides to their spot (a third of the way each frame), so joining and leaving never jump.
 let placed = new Set(), settling = 0
 function place() {
-  const scale = 512 * 2 ** map.getZoom(), groups = []
+  const scale = 512 * 2 ** map.getZoom(), groups = [], cells = {} // cells: groups by 4px square, to only look at the 9 squares around
   for (const p of shown) {
     const m = maplibregl.MercatorCoordinate.fromLngLat(p.ll), x = m.x * scale, y = m.y * scale // in screen pixels
-    const g = groups.find(g => Math.hypot(g.x - x, g.y - y) < 4)
+    const cx = Math.floor(x / 4), cy = Math.floor(y / 4)
+    let g = null
+    for (let i = -1; i <= 1 && !g; i++) for (let j = -1; j <= 1 && !g; j++) g = (cells[(cx + i) + "," + (cy + j)] || []).find(g => Math.hypot(g.x - x, g.y - y) < 4)
     if (g) g.members.push({ p, x, y, d: Math.hypot(g.x - x, g.y - y) })
-    else groups.push({ x, y, members: [{ p, x, y, d: 0 }] })
+    else {
+      groups.push(g = { x, y, members: [{ p, x, y, d: 0 }] })
+      ;(cells[cx + "," + cy] = cells[cx + "," + cy] || []).push(g)
+    }
   }
   let moving = false
   for (const g of groups) {
@@ -305,18 +311,21 @@ function place() {
   placed = new Set(shown)
   cancelAnimationFrame(settling)
   settling = moving ? requestAnimationFrame(place) : 0
-  // a line is faded when either end is
+  // lines join people in the years or in 🌳 (not the light gray ones); a line is faded when either end is outside the years
   const lines = [], dots = [], dim = [], trail = []
-  for (const p of shown) {
+  const linked = new Set(shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
+  for (const p of linked) {
     for (const id of [p.father, p.mother]) {
-      if (shown.includes(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
+      if (linked.has(byId[id])) lines.push(feature("LineString", [byId[id].pos, p.pos], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
     }
     for (const u of p.unions) {
-      if (shown.includes(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
+      if (linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
     }
+  }
+  for (const p of shown) {
     const icon = { M: "man", F: "woman" }[p.sex] || "person"
     if (inRange(p)) dots.push(feature("Point", p.pos, { id: p.id, icon }))
-    else dim.push(feature("Point", p.pos, { id: p.id, icon: "gray-" + icon }))
+    else dim.push(feature("Point", p.pos, { id: p.id, icon: (linked.has(p) ? "gray-" : "light-") + icon }))
   }
 
   // selected person: black ring, and their life's places (white circles) joined by a dashed line in date order
@@ -398,7 +407,10 @@ function addIcons() {
   make("man", "#2f6fd6")
   make("woman", "#e0457b", true)
   make("person", "black")
-  for (const name of ["man", "woman", "person"]) make("gray-" + name, "gray", name == "woman") // 🌳 ancestors outside the years
+  for (const name of ["man", "woman", "person"]) {
+    make("gray-" + name, "gray", name == "woman") // 🌳 ancestors outside the years
+    make("light-" + name, "#c8c8c8", name == "woman") // 👥 everyone else outside the years
+  }
 }
 
 // 10 × 22 figure: head, then shoulders and two legs (man) or a dress and two legs (woman)
@@ -498,7 +510,8 @@ function drawMenu() {
     + (menuOpen ? `<button class="${show.unions ? "on" : ""}" onclick="toggle('unions')">💍</button>`
       + `<button class="${show.parents ? "on" : ""}" onclick="toggle('parents')">👪</button>`
       + `<button class="${show.children ? "on" : ""}" onclick="toggle('children')">🧒</button>`
-      + `<button class="${ancestors ? "on" : ""}" onclick="toggle('ancestors')">🌳</button>` : "")
+      + `<button class="${ancestors ? "on" : ""}" onclick="toggle('ancestors')">🌳</button>`
+      + `<button class="${everyone ? "on" : ""}" onclick="toggle('everyone')">👥</button>` : "")
 }
 
 function refresh() {
@@ -511,6 +524,7 @@ function refresh() {
 
 function toggle(key) {
   if (key == "ancestors") ancestors = !ancestors
+  else if (key == "everyone") everyone = !everyone
   else show[key] = !show[key]
   refresh()
 }
