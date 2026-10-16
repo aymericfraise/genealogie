@@ -17,6 +17,12 @@
   #track { height: 1px; }
   #range { position: fixed; left: calc(50% - 30px); bottom: 0; width: 60px; height: 80px; box-sizing: border-box; border: 2px solid #333; border-top: 0; pointer-events: none; } /* the years under it are the ones shown */
   #needle { position: fixed; left: 50%; bottom: 56px; transform: translateX(-50%); min-width: 60px; padding: 2px 6px; box-sizing: border-box; text-align: center; white-space: nowrap; border-radius: 8px; background: #333; color: white; font: bold 15px system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; pointer-events: none; }
+  /* tree: the timeline is a strip on the left, years going down, the range open towards the map */
+  body.tree #ruler { top: 0; width: 80px; height: 100%; }
+  body.tree #wheel { top: 0; right: auto; width: 80px; height: auto; overflow-x: hidden; overflow-y: scroll; touch-action: pan-y; }
+  body.tree #range { left: 0; top: calc(50% - 30px); bottom: auto; width: 80px; height: 60px; border-top: 2px solid #333; border-right: 0; }
+  body.tree #needle { left: 84px; top: 50%; bottom: auto; transform: translateY(-50%); }
+  body.tree #card { left: 90px; bottom: 10px; width: min(340px, calc(100% - 100px)); }
   #card { display: grid; position: fixed; left: 10px; bottom: 90px; width: min(340px, calc(100% - 20px)); z-index: 1000; font: 16px system-ui, -apple-system, sans-serif; }
   #summary { position: relative; padding: 8px 10px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; }
   #card.wed #summary { border-top: 1px solid #eee; border-top-left-radius: 0; border-top-right-radius: 0; } /* spouses' block sits on the card, 💍 on the seam */
@@ -119,9 +125,9 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
     map.addLayer({ id: "dim", type: "symbol", source: "dim", layout: icons })
     map.addLayer({ id: "trail-line", type: "line", source: "trail", filter: ["==", ["get", "kind"], "path"], paint: { "line-color": "black", "line-width": 2, "line-dasharray": [3, 3] } })
     map.addLayer({ id: "people", type: "symbol", source: "people", layout: icons })
-    // names right of the figures, in the tree only
+    // names under the figures, in the tree only
     map.addLayer({ id: "names", type: "symbol", source: "people", paint: { "text-halo-color": "white", "text-halo-width": 2 },
-      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-anchor": "left", "text-offset": [0.9, 0], "text-max-width": 30, visibility: "none" } })
+      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-anchor": "top", "text-offset": [0, 1.2], "text-max-width": 7, visibility: "none" } })
     map.on("move", followMap)
     map.addLayer({ id: "trail-stops", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "stop"],
       paint: { "circle-color": "white", "circle-radius": 2, "circle-stroke-color": "black", "circle-stroke-width": 2 } })
@@ -193,30 +199,30 @@ function start(list) {
   counts = []
   for (let y = first; y <= last; y++) counts.push(people.filter(p => p.from <= y && y <= p.to).length)
   // mouse wheel scrolls the years; dragging left/right scrolls (mouse), dragging up/down zooms (mouse and touch)
-  wheel.addEventListener("wheel", e => { e.preventDefault(); flight++; wheel.scrollBy({ left: e.deltaY + e.deltaX, behavior: "smooth" }) }, { passive: false })
+  wheel.addEventListener("wheel", e => { e.preventDefault(); flight++; wheel.scrollBy({ [tree ? "top" : "left"]: e.deltaY + e.deltaX, behavior: "smooth" }) }, { passive: false })
   let drag = null, lastMove = 0
   wheel.onpointerdown = e => { flight++; drag ={ x: e.clientX, y: e.clientY, ppy, center: center(), mouse: e.pointerType == "mouse" } }
   window.onpointermove = e => {
     if (!drag) return
     // zoomed all the way out, the whole timeline fits under the range; all the way in, one year fills it
-    ppy = Math.min(60, Math.max(60 / (last - first), drag.ppy * Math.pow(2, (drag.y - e.clientY) / 40)))
-    track.style.width = (last - first) * ppy + wheel.clientWidth + "px"
-    wheel.scrollLeft = (drag.center - first) * ppy - (drag.mouse ? e.clientX - drag.x : 0)
-    lastMove = e.movementX
+    ppy = Math.min(60, Math.max(60 / (last - first), drag.ppy * Math.pow(2, (tree ? e.clientX - drag.x : drag.y - e.clientY) / 40)))
+    sizeTrack()
+    scrollWheel((drag.center - first) * ppy - (drag.mouse ? (tree ? e.clientY - drag.y : e.clientX - drag.x) : 0))
+    lastMove = tree ? e.movementY : e.movementX
   }
   window.onpointerup = window.onpointercancel = () => {
-    if (drag && drag.mouse) wheel.scrollBy({ left: -lastMove * 15, behavior: "smooth" }) // inertia: keep going a bit in the drag direction
+    if (drag && drag.mouse) wheel.scrollBy({ [tree ? "top" : "left"]: -lastMove * 15, behavior: "smooth" }) // inertia: keep going a bit in the drag direction
     drag = null
   }
   setYear(last)
 }
 
-// full tree, across in years like the timeline (birth year), and down in slots: grown from the person with the most ancestors,
-// a couple's ancestors laid out first, the father's above and the mother's below, their children centred on them, each with their
+// full tree, down in years like the timeline beside it (birth year), and across in slots: grown from the person with the most ancestors,
+// a couple's ancestors laid out first, the father's on the left and the mother's on the right, their children centred under them, each with their
 // spouse next to them, then the children's own families. Each generation fills its own slots in order: a person goes where they
 // belong unless their generation already used it.
-const YEAR = 0.0002, SLOT = 0.0012 // degrees, near 0,0 where the map is not stretched
-let treeHome = 0 // latitude of the person the tree grew from
+const YEAR = 0.0002, SLOT = 0.0032 // degrees, near 0,0 where the map is not stretched
+let treeHome = 0 // longitude of the person the tree grew from
 function layTree() {
   const next = {} // next free slot of each row
   const parents = p => [byId[p.father], byId[p.mother]].filter(q => q)
@@ -271,8 +277,8 @@ function layTree() {
     const parent = parents(p).find(q => q.treeYear != null)
     p.treeYear = spouse ? spouse.treeYear : child ? child.treeYear - 30 : parent ? parent.treeYear + 30 : null
   }
-  for (const p of people) if (p.treeYear != null) p.node = [-p.x * SLOT, p.treeYear * YEAR]
-  treeHome = order.find(p => p.node).node[0]
+  for (const p of people) if (p.treeYear != null) p.node = [-p.treeYear * YEAR, p.x * SLOT]
+  treeHome = order.find(p => p.node).node[1]
 }
 
 // tree button: switch between the world map and the tree; the selected person is centred on the other side,
@@ -280,10 +286,15 @@ function layTree() {
 let views = {}
 function toggleTree() {
   if (!mapReady || !people.length) return
-  if (tree) views.tree = map.getCenter().lat
+  if (tree) views.tree = map.getCenter().lng
   else views.map = { center: map.getCenter(), zoom: map.getZoom() }
+  const year = center()
   tree = !tree
   treeToggle.classList.toggle("on", tree)
+  document.body.classList.toggle("tree", tree)
+  sizeTrack()
+  scrollWheel((year - first) * ppy)
+  drawRuler()
   for (const id of baseLayers) map.setLayoutProperty(id, "visibility", tree ? "none" : "visible")
   map.setLayoutProperty("names", "visibility", tree ? "visible" : "none")
   syncing = true // the zoom limits can move the map: not the timeline's business
@@ -294,21 +305,21 @@ function toggleTree() {
   if (tree) {
     if (s) {
       flight++
-      wheel.scrollLeft = (s[1] / YEAR - first) * ppy
+      scrollWheel((-s[0] / YEAR - first) * ppy)
     }
-    syncMap(s ? s[0] : views.tree ?? treeHome)
+    syncMap(s ? s[1] : views.tree ?? treeHome)
   }
   else if (s) map.jumpTo({ center: [s[1], s[0]], zoom: views.map.zoom })
   else map.jumpTo(views.map)
   draw()
 }
 
-// in the tree, the map's across is the timeline: the same year in the middle, the same pixels per year, either way round
+// in the tree, the map's down is the timeline: the same year in the middle, the same pixels per year, either way round
 const zoomOf = ppy => Math.log2(ppy / YEAR * 360 / 512)
 let syncing = false
-function syncMap(lat = map.getCenter().lat) {
-  const c = map.getCenter(), lng = center() * YEAR, zoom = zoomOf(ppy)
-  if (Math.abs(c.lng - lng) / YEAR * ppy < 0.5 && Math.abs(map.getZoom() - zoom) < 0.001 && c.lat == lat) return
+function syncMap(lng = map.getCenter().lng) {
+  const c = map.getCenter(), lat = -center() * YEAR, zoom = zoomOf(ppy)
+  if (Math.abs(c.lat - lat) / YEAR * ppy < 0.5 && Math.abs(map.getZoom() - zoom) < 0.001 && c.lng == lng) return
   syncing = true
   map.jumpTo({ center: [lng, lat], zoom })
   syncing = false
@@ -317,14 +328,14 @@ function followMap() {
   if (!tree || syncing) return
   flight++
   ppy = YEAR * 512 * 2 ** map.getZoom() / 360
-  track.style.width = (last - first) * ppy + wheel.clientWidth + "px"
-  wheel.scrollLeft = (map.getCenter().lng / YEAR - first) * ppy
+  sizeTrack()
+  scrollWheel((-map.getCenter().lat / YEAR - first) * ppy)
   drawRuler()
 }
 
 function buildWheel() {
   first = Math.floor(min / 10) * 10
-  track.style.width = (last - first) * ppy + wheel.clientWidth + "px" // half a screen of padding on each side, so every year can reach the middle
+  sizeTrack()
 }
 
 wheel.onscroll = () => {
@@ -338,24 +349,35 @@ window.onresize = () => {
   drawRuler()
 }
 
+// the timeline runs across at the bottom, or down on the left in the tree
+const along = el => tree ? el.clientHeight : el.clientWidth
+const scrolled = () => tree ? wheel.scrollTop : wheel.scrollLeft
+const scrollWheel = v => tree ? wheel.scrollTop = v : wheel.scrollLeft = v
+function sizeTrack() {
+  const length = (last - first) * ppy + along(wheel) + "px" // half a screen of padding on each side, so every year can reach the middle
+  track.style.width = tree ? "1px" : length
+  track.style.height = tree ? length : "1px"
+}
+
 // year in the middle of the timeline (not rounded)
 function center() {
-  return first + wheel.scrollLeft / ppy
+  return first + scrolled() / ppy
 }
 
 function setYear(y) {
-  wheel.scrollLeft = (y - first) * ppy
+  scrollWheel((y - first) * ppy)
   drawRuler()
   draw()
 }
 
 // timeline: alive count as gray bars, and year lines with their numbers, as far apart as the zoom allows
 function drawRuler() {
-  const w = ruler.clientWidth, h = ruler.clientHeight, dpr = devicePixelRatio
-  ruler.width = w * dpr
-  ruler.height = h * dpr
+  const dpr = devicePixelRatio, w = along(ruler), h = tree ? ruler.clientWidth : ruler.clientHeight // w along, h across from the map's side
+  ruler.width = ruler.clientWidth * dpr
+  ruler.height = ruler.clientHeight * dpr
   const ctx = ruler.getContext("2d")
-  ctx.scale(dpr, dpr)
+  if (tree) ctx.setTransform(0, dpr, -dpr, 0, h * dpr, 0) // across goes right to left, so the map's side is on the right
+  else ctx.scale(dpr, dpr)
   const left = center() - w / 2 / ppy, x = y => (y - left) * ppy
   const max = Math.max(1, ...counts)
   ctx.fillStyle = "#f0f0f0" // grayed: before the first birth and after this year
@@ -396,16 +418,17 @@ function drawRuler() {
   }
   // numbers of the thick lines in white pills with a soft gray outline, in the bottom half, fading with their line
   Object.assign(ctx, { font: "bold 13px system-ui, -apple-system, sans-serif", textAlign: "center", textBaseline: "middle", lineWidth: 1, strokeStyle: "#ccc" })
+  if (tree) ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   for (const [y, X, alpha] of labels) {
-    const pill = Math.ceil(ctx.measureText(y).width) + 14
+    const pill = Math.ceil(ctx.measureText(y).width) + 14, [cx, cy] = tree ? [h - 51, X] : [X, 51]
     ctx.globalAlpha = alpha
     ctx.beginPath()
-    ctx.roundRect(Math.round(X - pill / 2) + 0.5, 40.5, pill, 20, 8)
+    ctx.roundRect(Math.round(cx - pill / 2) + 0.5, Math.round(cy) - 10.5, pill, 20, 8)
     ctx.fillStyle = "white"
     ctx.fill()
     ctx.stroke()
     ctx.fillStyle = "#333"
-    ctx.fillText(y, X, 51)
+    ctx.fillText(y, cx, cy)
   }
   ctx.globalAlpha = 1
 }
@@ -497,15 +520,15 @@ function place() {
   const lines = [], dots = [], dim = [], trail = []
   const linked = new Set(tree ? shown : shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
   const out = p => !tree && !inRange(p)
-  const eldest = {} // tree: earliest child of each couple, where their bar stands
-  if (tree) for (const p of linked) eldest[p.father + "," + p.mother] = Math.min(eldest[p.father + "," + p.mother] ?? Infinity, p.pos[0])
+  const eldest = {} // tree: earliest child of each couple (highest up), where their bar stands
+  if (tree) for (const p of linked) eldest[p.father + "," + p.mother] = Math.max(eldest[p.father + "," + p.mother] ?? -Infinity, p.pos[1])
   for (const p of linked) {
     const ps = [byId[p.father], byId[p.mother]].filter(q => linked.has(q))
     if (tree && ps.length) {
-      // tree: one line from the middle of the parents, across to a bar halfway to their eldest child, along it, and on to the child
+      // tree: one line from the middle of the parents, down to a bar halfway to their eldest child, along it, and down to the child
       const top = [ps.reduce((s, q) => s + q.pos[0], 0) / ps.length, ps.reduce((s, q) => s + q.pos[1], 0) / ps.length]
-      const bar = (top[0] + eldest[p.father + "," + p.mother]) / 2
-      lines.push(feature("LineString", [top, [bar, top[1]], [bar, p.pos[1]], p.pos], { kind: "parent", dim: false }))
+      const bar = (top[1] + eldest[p.father + "," + p.mother]) / 2
+      lines.push(feature("LineString", [top, [top[0], bar], [p.pos[0], bar], p.pos], { kind: "parent", dim: false }))
     }
     else for (const q of ps) if (links) lines.push(feature("LineString", [q.pos, p.pos], { kind: "parent", dim: out(p) || out(q) }))
     for (const u of p.unions) {
@@ -856,11 +879,11 @@ const ease = t => t < 0.5 ? 4 * t ** 3 : 1 - (2 - 2 * t) ** 3 / 2
 
 // one motion to year y and place lngLat (either may be missing): the map zooms out and back in (flyTo),
 // the timeline does the same in step, zooming out until both years fit (unless keepZoom), so the jump's size shows on both.
-// In the tree, the timeline carries the map across, and up or down follows in step
+// In the tree, the timeline carries the map up or down, and across follows in step
 function travel(y, lngLat, keepZoom) {
-  if (tree && lngLat) y = lngLat[0] / YEAR
-  const lat0 = tree ? map.getCenter().lat : 0, lat1 = tree && lngLat ? lngLat[1] : lat0
-  const w = wheel.clientWidth, y0 = center(), dy = y ? Math.abs(y - y0) : 0
+  if (tree && lngLat) y = -lngLat[1] / YEAR
+  const lng0 = tree ? map.getCenter().lng : 0, lng1 = tree && lngLat ? lngLat[0] : lng0
+  const w = along(wheel), y0 = center(), dy = y ? Math.abs(y - y0) : 0
   const px = lngLat && mapReady ? map.project(lngLat).dist(map.project(map.getCenter())) : 0
   const dz = lngLat && mapReady && !tree ? Math.abs(12 - map.getZoom()) : 0
   const duration = Math.min(3000, 600 + 700 * Math.max(Math.log2(1 + px / w) + dz / 4, Math.log2(1 + dy * ppy / w)))
@@ -872,9 +895,9 @@ function travel(y, lngLat, keepZoom) {
     if (id != flight) return
     const t = Math.min(1, (now - start) / duration)
     ppy = t < 1 ? ppy0 * (far / ppy0) ** Math.sin(Math.PI * t) : ppy0
-    track.style.width = (last - first) * ppy + w + "px"
-    wheel.scrollLeft = (y0 + (y - y0) * ease(t) - first) * ppy
-    if (tree) syncMap(lat0 + (lat1 - lat0) * ease(t))
+    sizeTrack()
+    scrollWheel((y0 + (y - y0) * ease(t) - first) * ppy)
+    if (tree) syncMap(lng0 + (lng1 - lng0) * ease(t))
     if (t < 1) return requestAnimationFrame(step)
     drawRuler()
     draw()
