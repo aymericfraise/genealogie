@@ -111,7 +111,7 @@ let ancestors = true // 🌳: with someone selected, their ancestors are on the 
 let lineage = null // those people (outside the range faded), or null
 let everyone = true // 👥: people outside the years are on the map too, in light gray
 let links = false // 🔗: parent–child and union lines on the map
-let shown = [] // people on the map
+let shown = [], shownSet = new Set() // people on the map
 const inRange = p => p.from <= to && from <= p.to
 let tree = false // tree button: the map shows the full tree instead of the world, on a blank background
 let byYear = false // 📅: in the tree, each person at their own birth year, with the timeline beside it; otherwise one row per generation
@@ -530,6 +530,7 @@ function draw() {
     add(selected)
   }
   shown = people.filter(p => spot(p) && (tree || everyone || (lineage ? lineage.has(p) : inRange(p))))
+  shownSet = new Set(shown)
   if (!mapReady) return
 
   // people at the same place sit on a small ring (15 m apart), visible once clustering stops
@@ -559,25 +560,32 @@ function draw() {
 // change while they matter, and the pull is a function of the distance alone: none at 12px, full under 4px. So joining and
 // leaving follow the zoom exactly; only the card an icon sits on (when a group passes 2 or 10) glides, a third of the way each frame.
 let placed = new Set(), settling = 0, laidZoom = null
+let laid = [], laidArea = [0, 0, 0, 0] // the people laid out: those around the screen, one more screen each way (world pixels)
 let lines = [], dots = [], dims = [] // what paint() draws: [a, b, kind, dim] lines between people, icons in and outside the period
+const key = (x, y) => x * 67108864 + y // grid cell as one number: no strings to make and throw away for each icon
 const AROUND = [[0, 0], [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] // own cell first: in a crowd, the one close enough is there
 function place() {
-  const scale = 512 * 2 ** map.getZoom(), cells = {}, fine = {}, size = new Map() // icons by 12px and 4px square, to only look at the 9 around
+  const scale = 512 * 2 ** map.getZoom(), cells = new Map(), fine = new Map(), size = new Map() // icons by 12px and 4px square, to only look at the 9 around
+  const c = maplibregl.MercatorCoordinate.fromLngLat(map.getCenter()), W = overlay.clientWidth, H = overlay.clientHeight
+  laidArea = [c.x * scale - 1.5 * W, c.y * scale - 1.5 * H, c.x * scale + 1.5 * W, c.y * scale + 1.5 * H]
   for (const p of shown) {
-    p.x = p.m.x * scale // own spot
-    p.y = p.m.y * scale
+    p.sx = p.x = p.m.x * scale // own spot (lines may end at people out of the area: they stay there)
+    p.sy = p.y = p.m.y * scale
+  }
+  laid = shown.filter(p => laidArea[0] < p.x && p.x < laidArea[2] && laidArea[1] < p.y && p.y < laidArea[3])
+  for (const p of laid) {
     const cx = Math.floor(p.x / 12), cy = Math.floor(p.y / 12), fx = Math.floor(p.x / 4), fy = Math.floor(p.y / 4)
     p.anchor = null
     let d = 12
     // first one under 4px (full pull already: any closer one would change nothing you can see), else the nearest under 12px
-    if (!tree) close: for (const [i, j] of AROUND) for (const q of fine[(fx + i) + "," + (fy + j)] || []) {
+    if (!tree) close: for (const [i, j] of AROUND) for (const q of fine.get(key(fx + i, fy + j)) || []) {
       if (Math.hypot(q.x - p.x, q.y - p.y) < 4) {
         d = Math.hypot(q.x - p.x, q.y - p.y)
         p.anchor = q
         break close
       }
     }
-    if (!tree && !p.anchor) for (const [i, j] of AROUND) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
+    if (!tree && !p.anchor) for (const [i, j] of AROUND) for (const q of cells.get(key(cx + i, cy + j)) || []) {
       if (Math.hypot(q.x - p.x, q.y - p.y) < d) {
         d = Math.hypot(q.x - p.x, q.y - p.y)
         p.anchor = q
@@ -588,10 +596,12 @@ function place() {
     p.root = p.pull > 0.5 ? p.anchor.root : p // front card of their group
     p.rank = size.get(p.root) || 0 // 0 for the front card, then 1, 2… in order of joining
     size.set(p.root, p.rank + 1)
-    ;(cells[cx + "," + cy] = cells[cx + "," + cy] || []).push(p)
-    ;(fine[fx + "," + fy] = fine[fx + "," + fy] || []).push(p)
+    if (!cells.has(key(cx, cy))) cells.set(key(cx, cy), [])
+    cells.get(key(cx, cy)).push(p)
+    if (!fine.has(key(fx, fy))) fine.set(key(fx, fy), [])
+    fine.get(key(fx, fy)).push(p)
   }
-  for (const p of shown) p.size = size.get(p.root)
+  for (const p of laid) p.size = size.get(p.root)
   settle()
   paintLists()
 }
@@ -599,7 +609,7 @@ function place() {
 // cards gliding to their place, a third of the way each frame: only the shown spots move, the anchors stay
 function settle() {
   let moving = false
-  for (const p of shown) {
+  for (const p of laid) {
     const n = p.size, card = p.rank == 0 ? 0 : p.rank == 1 ? 1 : n <= 10 ? 1 : 2 // 0 front, 1 and 2 behind
     if (!placed.has(p)) p.card = card
     p.card += (card - p.card) / 3
@@ -613,7 +623,7 @@ function settle() {
     }
     p.hidden = p.rank > 2 && p.pull == 1 && card == 2 && Math.abs(p.card - 2) < 0.01 // right behind the third card: no need to draw
   }
-  placed = new Set(shown)
+  placed = new Set(laid)
   cancelAnimationFrame(settling)
   settling = moving ? requestAnimationFrame(() => { settle(); map.triggerRepaint() }) : 0
 }
@@ -624,23 +634,23 @@ function paintLists() {
   lines = []
   dots = []
   dims = []
-  const linked = new Set(tree ? shown : shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
+  const linked = p => shownSet.has(p) && (tree || inRange(p) || (lineage && lineage.has(p)))
   const out = p => !tree && !inRange(p)
-  for (const p of linked) {
-    const ps = [byId[p.father], byId[p.mother]].filter(q => linked.has(q))
+  if (links || tree) for (const p of shown) if (linked(p)) {
+    const ps = [byId[p.father], byId[p.mother]].filter(linked)
     // tree: one straight line from the middle of the parents to the child
     if (tree && ps.length) lines.push([{ sx: ps.reduce((s, q) => s + q.sx, 0) / ps.length, sy: ps.reduce((s, q) => s + q.sy, 0) / ps.length }, p, "parent", false])
     else if (links) for (const q of ps) lines.push([q, p, "parent", out(p) || out(q)])
     for (const u of p.unions) {
       const s = byId[u.spouse]
-      if ((links || tree) && linked.has(s) && p.id < s.id) lines.push([s, p, "union", out(p) || out(s)])
+      if (linked(s) && p.id < s.id) lines.push([s, p, "union", out(p) || out(s)])
     }
   }
-  for (const p of shown) {
+  for (const p of laid) {
     p.icon = ({ M: "man", F: "woman" }[p.sex] || "person")
     if (!out(p)) dots.push(p)
     else {
-      p.icon = (linked.has(p) ? "gray-" : "light-") + p.icon
+      p.icon = (linked(p) ? "gray-" : "light-") + p.icon
       dims.push(p)
     }
   }
@@ -656,7 +666,8 @@ function paint() {
     overlay.width = Math.round(W * dpr)
     overlay.height = Math.round(H * dpr)
   }
-  if (map.getZoom() !== laidZoom) {
+  const view = maplibregl.MercatorCoordinate.fromLngLat(map.getCenter()), at = 512 * 2 ** laidZoom
+  if (map.getZoom() !== laidZoom || view.x * at - W / 2 < laidArea[0] || view.x * at + W / 2 > laidArea[2] || view.y * at - H / 2 < laidArea[1] || view.y * at + H / 2 > laidArea[3]) {
     laidZoom = map.getZoom()
     place()
   }
