@@ -220,7 +220,7 @@ function setYear(y) {
   draw()
 }
 
-// timeline: alive count as gray bars, and year ticks, each with its number, as far apart as the zoom allows
+// timeline: alive count as gray bars, and year lines with their numbers, as far apart as the zoom allows
 function drawRuler() {
   const w = ruler.clientWidth, h = ruler.clientHeight, dpr = devicePixelRatio
   ruler.width = w * dpr
@@ -237,29 +237,48 @@ function drawRuler() {
     const bar = n / max * (h - 30)
     ctx.fillRect(x(first + i), h - bar, Math.max(1, ppy), bar)
   })
-  const steps = [1, 5, 10, 50, 100, 500, 1000]
-  const step = steps.find(s => s * ppy >= 55) // numbered ticks
-  const fade = s => Math.min(1, Math.max(0, (s * ppy - 12) / 28)) // finer ticks fade in as they spread apart, from 12px to 40px
-  const fine = steps.find(s => fade(s) > 0)
-  // soft rounded ticks over the full height, fainter for finer years, broken by the numbers' lane in the bottom half (from 38px to 58px)
-  Object.assign(ctx, { strokeStyle: "#999", lineWidth: 1.5, lineCap: "round" })
-  for (let y = Math.ceil(left / fine) * fine; x(y) < w; y += fine) {
-    const f = fade(steps.findLast(s => y % s == 0))
-    ctx.globalAlpha = f
+  // scales: a thick line every s years, and 4 thin ones splitting each gap in 5 (when that falls on whole years). A scale shows
+  // once its thick lines are 70px apart, and gives way as the next finer one comes in (its lines going from 50 to 70px apart),
+  // so lines and numbers cross-fade from one scale to the next; lines both scales share stay. Only two widths, on whole pixels.
+  const steps = [1, 5, 10, 50, 100, 500, 1000, 5000]
+  const smooth = v => (v = Math.min(1, Math.max(0, v))) * v * (3 - 2 * v)
+  const on = s => smooth((s * ppy - 50) / 20)
+  const scales = steps.map((s, i) => ({ s, w: on(s) * (1 - (i ? on(steps[i - 1]) : 0)) })).filter(k => k.w > 0.01)
+  const fine = Math.min(...scales.map(k => k.s % 5 ? k.s : k.s / 5))
+  const labels = []
+  for (let y = Math.ceil((left - 30 / ppy) / fine) * fine; x(y) < w + 30; y += fine) {
+    let thick = 0, thin = 0
+    for (const k of scales) {
+      if (y % k.s == 0) thick += k.w
+      if (k.s % 5 == 0 && y % (k.s / 5) == 0) thin += k.w
+    }
+    thick = Math.min(1, thick)
+    thin = Math.min(1, thin) - thick
+    const X = Math.round(x(y))
+    if (thin > 0) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.1 * thin})`
+      ctx.fillRect(X, 0, 1, h)
+    }
+    if (thick > 0) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${0.22 * thick})`
+      ctx.fillRect(X - 1, 0, 2, h)
+      labels.push([y, X, thick])
+    }
+  }
+  // numbers of the thick lines in white pills with a soft gray outline, in the bottom half, fading with their line
+  Object.assign(ctx, { font: "bold 13px system-ui, -apple-system, sans-serif", textAlign: "center", textBaseline: "middle", lineWidth: 1, strokeStyle: "#ccc" })
+  for (const [y, X, alpha] of labels) {
+    const pill = Math.ceil(ctx.measureText(y).width) + 14
+    ctx.globalAlpha = alpha
     ctx.beginPath()
-    ctx.moveTo(x(y), 1)
-    ctx.lineTo(x(y), 36)
-    ctx.moveTo(x(y), 60)
-    ctx.lineTo(x(y), h - 1)
+    ctx.roundRect(Math.round(X - pill / 2) + 0.5, 40.5, pill, 20, 8)
+    ctx.fillStyle = "white"
+    ctx.fill()
     ctx.stroke()
+    ctx.fillStyle = "#333"
+    ctx.fillText(y, X, 51)
   }
   ctx.globalAlpha = 1
-  // bold numbers centred on their tick in the lane, with a white outline over the count bars
-  Object.assign(ctx, { font: "bold 15px system-ui, -apple-system, sans-serif", textAlign: "center", fillStyle: "#333", strokeStyle: "white", lineWidth: 4, lineJoin: "round" })
-  for (let y = Math.ceil((left - 30 / ppy) / step) * step; x(y) < w + 30; y += step) { // and those half off the edges
-    ctx.strokeText(y, x(y), 53)
-    ctx.fillText(y, x(y), 53)
-  }
 }
 
 function draw() {
