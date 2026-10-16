@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Généalogie</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  #login { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; background: rgba(0, 0, 0, 0.35); color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+  #login input { font-size: 16px; } /* 16px stops iOS zooming on focus */
+  #map { position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
+  #ruler { position: fixed; left: 0; bottom: 0; width: 100%; height: 80px; background: white; }
+  #wheel { position: fixed; left: 0; right: 0; bottom: 0; height: 80px; overflow-x: scroll; scrollbar-width: none; touch-action: pan-x; user-select: none; cursor: grab; }
+  #wheel::-webkit-scrollbar { display: none; }
+  #track { height: 1px; }
+  #range { position: fixed; left: calc(50% - 30px); bottom: 0; width: 60px; height: 80px; box-sizing: border-box; border: 2px solid #333; border-top: 0; pointer-events: none; } /* the years under it are the ones shown */
+  #needle { position: fixed; left: 50%; bottom: 56px; transform: translateX(-50%); min-width: 60px; padding: 2px 6px; box-sizing: border-box; text-align: center; white-space: nowrap; border-radius: 8px; background: #333; color: white; font: bold 15px system-ui, -apple-system, sans-serif; font-variant-numeric: tabular-nums; pointer-events: none; }
+  #card { position: fixed; left: 10px; bottom: 90px; width: min(340px, calc(100% - 20px)); z-index: 1000; font: 16px system-ui, -apple-system, sans-serif; }
+  #summary { padding: 8px 10px; border-radius: 12px; background: white; box-shadow: 0 1px 6px #0003; }
+  .line { display: flex; gap: 8px; white-space: nowrap; }
+  .sex { flex: 0 0 22px; height: 22px; border-radius: 999px; text-align: center; line-height: 22px; color: white; background: gray; }
+  .sex.M { background: #2f6fd6; }
+  .sex.F { background: #e0457b; }
+  .row .sex { font-size: 13px; box-sizing: border-box; line-height: 18px; border: 2px solid gray; background: #eee; } /* relation emoji fits in the disk */
+  .row .sex.M { border-color: #2f6fd6; background: #e3ecfb; }
+  .row .sex.F { border-color: #e0457b; background: #fbe3ee; }
+  .line .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .line .years { color: #666; font-variant-numeric: tabular-nums; cursor: pointer; }
+  .buttons { display: flex; gap: 6px; margin-top: 6px; }
+  .buttons button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font-size: 18px; }
+  .buttons button.on { background: #c9d8f2; }
+  .buttons .info { flex: 1; align-self: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; font-size: 14px; }
+  .buttons[hidden] { display: none; }
+  #more { position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 6px; }
+  #more button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 999px; background: #eee; color: #333; font-size: 18px; }
+  #more button.on { background: #c9d8f2; }
+  #relatives { max-height: 80vh; overflow: hidden; transition: max-height 0.3s; }
+  #relatives.collapsed { max-height: 0; }
+  .row { margin-bottom: 4px; padding: 6px 10px; border-radius: 10px; background: white; box-shadow: 0 1px 4px #0002; cursor: pointer; transition: opacity 0.3s; }
+  .ghost { position: fixed; z-index: 2000; margin: 0; box-sizing: border-box; transition: all 0.3s; }
+  .appear { animation: appear 0.3s; }
+  @keyframes appear { from { opacity: 0; } }
+  #panel { max-height: 0; overflow-y: auto; padding: 0 12px; border-radius: 12px; background: white; transition: max-height 0.3s; }
+  #panel.open { max-height: 50vh; margin-bottom: 4px; box-shadow: 0 1px 6px #0003; } /* details unroll upward from the person card */
+  #panel b { display: block; font-size: 13px; color: #888; font-weight: normal; }
+  #panel a { display: inline-block; margin: 3px 2px 0 0; padding: 3px 10px; border-radius: 999px; text-decoration: none; }
+  #panel a.M { background: #e3ecfb; color: #1a4fa0; }
+  #panel a.F { background: #fbe3ee; color: #a01a5a; }
+  #panel a.date { background: #fdf0dc; color: #8a5200; }
+  #panel a.place { background: #e2f4e6; color: #1d6b34; }
+</style>
+</head>
+<body>
+<form id="login">
+  <input name="pw" type="password" placeholder="Mot de passe">
+  <button>Entrer</button>
+  <span id="err"></span>
+</form>
+<div id="map"></div>
+<canvas id="ruler"></canvas>
+<div id="wheel"><div id="track"></div></div>
+<div id="range"></div>
+<div id="needle"></div>
+<div id="more"></div>
+<div id="card" hidden>
+  <div id="relatives"></div>
+  <div id="panel"></div>
+  <div id="summary"></div>
+</div>
+<script>
+let people = [], byId = {}, min = 0, selected = null
+let ppy = 5, first = 0, last = new Date().getFullYear() // timeline: pixels per year (dragging up/down changes it), first and last year
+let from = 0, to = 0 // years under the 60px range in the middle: people alive at any point in them are shown
+let counts = [] // people alive each year, drawn behind the timeline
+let ancestors = true // 🌳: with someone selected, the map shows only them and their ancestors
+let lineage = null // those people (outside the range faded), or null
+
+// MapLibre map on OpenFreeMap (free, no account), keeping only nature, water, town names and borders: no roads, rails or buildings
+let map = null, mapReady = false
+fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(style => {
+  style.layers = style.layers.filter(l => /^(background|natural_earth|landcover|landuse_residential|water|label_village|label_town|label_city|label_other|boundary_2|boundary_3)/.test(l.id))
+  map = new maplibregl.Map({ container: "map", style, center: [2.5, 46.5], zoom: 5, maxZoom: 18 })
+  map.on("load", () => {
+    const empty = { type: "FeatureCollection", features: [] }
+    map.addSource("lines", { type: "geojson", data: empty })
+    map.addSource("people", { type: "geojson", data: empty })
+    map.addSource("counts", { type: "geojson", data: empty })
+    map.addSource("trail", { type: "geojson", data: empty })
+    map.addSource("dim", { type: "geojson", data: empty })
+    addIcons()
+    const icons = { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true }
+    map.addLayer({ id: "lines", type: "line", source: "lines", paint: { "line-color": ["match", ["get", "kind"], "union", "red", "gray"], "line-width": 1, "line-opacity": ["case", ["get", "dim"], 0.3, 1] } })
+    map.addLayer({ id: "dim", type: "symbol", source: "dim", layout: icons, paint: { "icon-opacity": 0.5 } })
+    map.addLayer({ id: "trail-line", type: "line", source: "trail", filter: ["==", ["get", "kind"], "path"], paint: { "line-color": "black", "line-width": 2, "line-dasharray": [3, 3] } })
+    map.addLayer({ id: "people", type: "symbol", source: "people", layout: icons })
+    map.addLayer({ id: "trail-stops", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "stop"],
+      paint: { "circle-color": "white", "circle-radius": 8, "circle-stroke-color": "black", "circle-stroke-width": 2 } })
+    map.addLayer({ id: "trail-labels", type: "symbol", source: "trail", filter: ["==", ["get", "kind"], "stop"],
+      layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Regular"], "text-size": 13, "text-anchor": "left", "text-offset": [1, 0], "text-allow-overlap": true },
+      paint: { "text-halo-color": "white", "text-halo-width": 2 } })
+    map.addLayer({ id: "selected", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "selected"],
+      paint: { "circle-opacity": 0, "circle-radius": 17, "circle-stroke-color": "black", "circle-stroke-width": 3 } })
+    map.addLayer({ id: "counts", type: "symbol", source: "counts",
+      layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": 15, "text-allow-overlap": true, "text-ignore-placement": true },
+      paint: { "text-halo-color": "white", "text-halo-width": 2 } })
+    map.on("click", "people", e => select(byId[e.features[0].properties.id]))
+    map.on("click", "dim", e => select(byId[e.features[0].properties.id]))
+    // count click: zoom until the zone's people fill the screen
+    map.on("click", "counts", e => {
+      const bounds = new maplibregl.LngLatBounds()
+      for (const p of levels[shownZoom][e.features[0].properties.i].members) bounds.extend(p.ll)
+      map.fitBounds(bounds, { padding: 80, maxZoom: 17 })
+    })
+    map.on("zoom", () => { if (shownZoom != level()) drawCounts() })
+    mapReady = true
+    draw()
+  })
+})
+
+document.getElementById("login").onsubmit = async e => {
+  e.preventDefault()
+  const data = new Uint8Array(await (await fetch("people.enc", { cache: "no-store" })).arrayBuffer())
+  console.log("people.enc loaded", data.length, "bytes")
+  const pw = await crypto.subtle.importKey("raw", new TextEncoder().encode(e.target.pw.value), "PBKDF2", false, ["deriveKey"])
+  const key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: data.slice(0, 16), iterations: 200000, hash: "SHA-256" }, pw, { name: "AES-GCM", length: 256 }, false, ["decrypt"])
+  const json = await crypto.subtle.decrypt({ name: "AES-GCM", iv: data.slice(16, 28) }, key, data.slice(28)).catch(() => null)
+  console.log("decrypt", json ? "ok" : "failed")
+  if (!json) return document.getElementById("err").textContent = "Mot de passe incorrect"
+  document.getElementById("login").remove()
+  start(JSON.parse(new TextDecoder().decode(json)))
+  drawMenu()
+}
+
+function start(list) {
+  people = list
+  for (const p of people) {
+    byId[p.id] = p
+    p.children = []
+    p.from = p.birth && p.birth.year
+    p.to = (p.death && p.death.year) || p.from + 80
+    const place = [p.birth, p.death].find(e => e && e.lat != null)
+    if (place) p.place = [place.lat, place.lon]
+  }
+  for (const p of people) {
+    if (byId[p.father]) byId[p.father].children.push(p.id)
+    if (byId[p.mother]) byId[p.mother].children.push(p.id)
+  }
+
+  min = Math.min(...people.filter(p => p.from).map(p => p.from))
+  console.log(people.length, "people,", people.filter(p => p.from).length, "with birth year,", people.filter(p => p.place).length, "with place, first year", min)
+  buildWheel()
+  counts = []
+  for (let y = first; y <= last; y++) counts.push(people.filter(p => p.from <= y && y <= p.to).length)
+  // mouse wheel scrolls the years; dragging left/right scrolls (mouse), dragging up/down zooms (mouse and touch)
+  wheel.addEventListener("wheel", e => { e.preventDefault(); flight++; wheel.scrollBy({ left: e.deltaY + e.deltaX, behavior: "smooth" }) }, { passive: false })
+  let drag = null, lastMove = 0
+  wheel.onpointerdown = e => { flight++; drag ={ x: e.clientX, y: e.clientY, ppy, center: center(), mouse: e.pointerType == "mouse" } }
+  window.onpointermove = e => {
+    if (!drag) return
+    // zoomed all the way out, the whole timeline fits under the range; all the way in, one year fills it
+    ppy = Math.min(60, Math.max(60 / (last - first), drag.ppy * Math.pow(2, (drag.y - e.clientY) / 40)))
+    track.style.width = (last - first) * ppy + wheel.clientWidth + "px"
+    wheel.scrollLeft = (drag.center - first) * ppy - (drag.mouse ? e.clientX - drag.x : 0)
+    lastMove = e.movementX
+  }
+  window.onpointerup = window.onpointercancel = () => {
+    if (drag && drag.mouse) wheel.scrollBy({ left: -lastMove * 15, behavior: "smooth" }) // inertia: keep going a bit in the drag direction
+    drag = null
+  }
+  setYear(last)
+}
+
+function buildWheel() {
+  first = Math.floor(min / 10) * 10
+  track.style.width = (last - first) * ppy + wheel.clientWidth + "px" // half a screen of padding on each side, so every year can reach the middle
+}
+
+wheel.onscroll = () => {
+  drawRuler()
+  const half = Math.floor(30 / ppy), y = Math.round(center())
+  if (from != y - half || to != y + half) draw()
+}
+window.onresize = () => {
+  buildWheel()
+  drawRuler()
+}
+
+// year in the middle of the timeline (not rounded)
+function center() {
+  return first + wheel.scrollLeft / ppy
+}
+
+function setYear(y) {
+  wheel.scrollLeft = (y - first) * ppy
+  drawRuler()
+  draw()
+}
+
+// timeline: alive count as gray bars, and year ticks, each with its number, as far apart as the zoom allows
+function drawRuler() {
+  const w = ruler.clientWidth, h = ruler.clientHeight, dpr = devicePixelRatio
+  ruler.width = w * dpr
+  ruler.height = h * dpr
+  const ctx = ruler.getContext("2d")
+  ctx.scale(dpr, dpr)
+  const left = center() - w / 2 / ppy, x = y => (y - left) * ppy
+  const max = Math.max(1, ...counts)
+  ctx.fillStyle = "#f0f0f0" // grayed: before the first birth and after this year
+  ctx.fillRect(0, 0, x(first), h)
+  ctx.fillRect(x(last + 1), 0, w, h)
+  ctx.fillStyle = "#e4e4e4"
+  counts.forEach((n, i) => {
+    const bar = n / max * (h - 30)
+    ctx.fillRect(x(first + i), h - bar, Math.max(1, ppy), bar)
+  })
+  const steps = [1, 5, 10, 50, 100, 500, 1000]
+  const step = steps.find(s => s * ppy >= 55) // numbered ticks
+  const fade = s => Math.min(1, Math.max(0, (s * ppy - 12) / 28)) // finer ticks fade in as they spread apart, from 12px to 40px
+  const fine = steps.find(s => fade(s) > 0)
+  ctx.font = "17px system-ui, -apple-system, sans-serif"
+  ctx.fillStyle = "#444"
+  for (let y = Math.ceil(left / fine) * fine; x(y) < w; y += fine) {
+    ctx.globalAlpha = fade(steps.findLast(s => y % s == 0))
+    ctx.fillRect(Math.round(x(y)), 0, 1, h)
+    ctx.globalAlpha = 1
+    if (y % step == 0) ctx.fillText(y, x(y) + 4, 52)
+  }
+}
+
+function draw() {
+  const half = Math.floor(30 / ppy), y = Math.round(center())
+  from = y - half
+  to = y + half
+  needle.textContent = from == to ? from : from + "–" + to
+  const inRange = p => p.from <= to && from <= p.to
+  lineage = null
+  if (ancestors && selected) {
+    lineage = new Set()
+    const add = p => { if (p) { lineage.add(p); add(byId[p.father]); add(byId[p.mother]) } }
+    add(selected)
+  }
+  const shown = people.filter(p => p.place && (lineage ? lineage.has(p) : inRange(p)))
+  console.log("years", from, to, ":", shown.length, "on map")
+  if (!mapReady) return
+
+  // people at the same place sit on a small ring (15 m apart), visible once clustering stops
+  const groups = {}
+  for (const p of shown) {
+    groups[p.place] = groups[p.place] || []
+    groups[p.place].push(p)
+  }
+  for (const group of Object.values(groups)) {
+    const [lat, lon] = group[0].place
+    const meters = group.length == 1 ? 0 : group.length * 15 / (2 * Math.PI)
+    group.forEach((p, i) => {
+      const angle = 2 * Math.PI * i / group.length
+      p.ll = [lon + meters * Math.cos(angle) / (111320 * Math.cos(lat * Math.PI / 180)), lat + meters * Math.sin(angle) / 111320] // [lon, lat] like MapLibre
+    })
+  }
+  // a line is faded when either end is
+  const lines = [], dots = [], dim = [], trail = []
+  for (const p of shown) {
+    for (const id of [p.father, p.mother]) {
+      if (shown.includes(byId[id])) lines.push(feature("LineString", [byId[id].ll, p.ll], { kind: "parent", dim: !inRange(p) || !inRange(byId[id]) }))
+    }
+    for (const u of p.unions) {
+      if (shown.includes(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].ll, p.ll], { kind: "union", dim: !inRange(p) || !inRange(byId[u.spouse]) }))
+    }
+    const icon = { M: "man", F: "woman" }[p.sex] || "person"
+    if (inRange(p)) dots.push(feature("Point", p.ll, { id: p.id, icon }))
+    else dim.push(feature("Point", p.ll, { id: p.id, icon: "gray-" + icon }))
+  }
+  group(shown.filter(inRange))
+  drawCounts()
+
+  // selected person: black ring, and their life's places (white circles) joined by a dashed line in date order
+  if (selected) {
+    const stops = selected.places.slice().sort((a, b) => (a.year || 9999) - (b.year || 9999))
+    trail.push(feature("LineString", stops.map(s => [s.lon, s.lat]), { kind: "path" }))
+    const labels = {}
+    for (const s of stops) {
+      const key = s.lon + "," + s.lat
+      const text = (KINDS[s.kind] || s.kind) + (s.year ? " " + s.year : "")
+      labels[key] = labels[key] ? labels[key] + ", " + text : text
+    }
+    for (const key in labels) trail.push(feature("Point", key.split(",").map(Number), { kind: "stop", label: labels[key] }))
+    if (shown.includes(selected)) trail.push(feature("Point", selected.ll, { kind: "selected" }))
+  }
+  map.getSource("lines").setData({ type: "FeatureCollection", features: lines })
+  map.getSource("people").setData({ type: "FeatureCollection", features: dots })
+  map.getSource("dim").setData({ type: "FeatureCollection", features: dim })
+  map.getSource("trail").setData({ type: "FeatureCollection", features: trail })
+}
+
+// zones for the counts: levels[z] holds the zones at zoom z, made by joining the zones of zoom z + 1 closer than 40px; no zones from zoom 16
+let levels = [], shownZoom = 0
+const level = () => Math.max(0, Math.min(16, Math.floor(map.getZoom())))
+
+function group(list) {
+  let prev = list.map(p => {
+    p.at = [] // p.at[z]: p's group at zoom z
+    const m = maplibregl.MercatorCoordinate.fromLngLat(p.ll)
+    return { x: m.x, y: m.y, members: [p] }
+  })
+  levels = []
+  for (let z = 16; z >= 0; z--) {
+    if (z < 16) {
+      const r = 40 / (512 * 2 ** z), next = []
+      for (const g of prev) {
+        const near = next.find(n => Math.hypot(n.parts[0].x - g.x, n.parts[0].y - g.y) < r)
+        if (near) near.parts.push(g)
+        else next.push({ parts: [g] })
+      }
+      prev = next.map(({ parts }) => {
+        if (parts.length == 1) return parts[0]
+        const members = parts.flatMap(g => g.members), mean = k => parts.reduce((s, g) => s + g[k] * g.members.length, 0) / members.length
+        return { x: mean("x"), y: mean("y"), members }
+      })
+    }
+    levels[z] = prev
+    for (const g of prev) for (const p of g.members) p.at[z] = g
+  }
+}
+
+// number of people over each zone of the current zoom that holds more than one
+function drawCounts() {
+  shownZoom = level()
+  const features = []
+  ;(levels[shownZoom] || []).forEach((g, i) => {
+    if (g.members.length < 2) return
+    const ll = new maplibregl.MercatorCoordinate(g.x, g.y).toLngLat()
+    features.push(feature("Point", [ll.lng, ll.lat], { i, n: g.members.length }))
+  })
+  map.getSource("counts").setData({ type: "FeatureCollection", features })
+}
+
+// bathroom-sign figures with a white outline: blue man, pink woman, black for unknown sex
+function addIcons() {
+  const s = 1.2 * devicePixelRatio, pad = 1.5
+  const make = (name, color, woman) => {
+    const c = document.createElement("canvas")
+    c.width = Math.ceil((10 + 2 * pad) * s)
+    c.height = Math.ceil((22 + 2 * pad) * s)
+    const ctx = c.getContext("2d")
+    ctx.scale(s, s)
+    Object.assign(ctx, { lineWidth: 2.5, lineJoin: "round", strokeStyle: "white", fillStyle: color })
+    const path = figure(pad, pad, woman)
+    ctx.stroke(path)
+    ctx.fill(path)
+    map.addImage(name, ctx.getImageData(0, 0, c.width, c.height), { pixelRatio: devicePixelRatio })
+  }
+  make("man", "#2f6fd6")
+  make("woman", "#e0457b", true)
+  make("person", "black")
+  for (const name of ["man", "woman", "person"]) make("gray-" + name, "gray", name == "woman") // 🌳 ancestors outside the years
+}
+
+// 10 × 22 figure: head, then shoulders and two legs (man) or a dress and two legs (woman)
+function figure(x, y, woman) {
+  const p = new Path2D()
+  p.arc(x + 5, y + 2.2, 2.2, 0, 2 * Math.PI)
+  if (woman) {
+    p.moveTo(x + 3, y + 5.4)
+    p.lineTo(x + 7, y + 5.4)
+    p.lineTo(x + 10, y + 15)
+    p.lineTo(x, y + 15)
+    p.closePath()
+    p.rect(x + 3, y + 15, 1.6, 7)
+    p.rect(x + 5.4, y + 15, 1.6, 7)
+  } else {
+    p.roundRect(x, y + 5.4, 10, 7.6, [2.5, 2.5, 1, 1])
+    p.rect(x + 2.5, y + 12, 2.2, 10)
+    p.rect(x + 5.3, y + 12, 2.2, 10)
+  }
+  return p
+}
+
+function feature(type, coordinates, properties) {
+  return { type: "Feature", geometry: { type, coordinates }, properties }
+}
+
+const KINDS = { NAISSANCE: "Naissance", BAPTEME: "Baptême", UNION: "Union", DECES: "Décès", INHUMATION: "Inhumation", PROFESSION: "Profession" }
+
+function link(id) {
+  return byId[id] ? `<a href="#" class="${byId[id].sex}" onclick="focusOn('${id}')">${byId[id].name}</a>` : ""
+}
+
+// date links move the timeline, place links move the map
+function when(e) {
+  const date = e.year ? `<a href="#" class="date" onclick="goYear(${e.year})">${e.date || e.year}</a>` : e.date || ""
+  const place = e.lat != null ? `<a href="#" class="place" onclick="goPlace(${e.lat}, ${e.lon})">${e.place}</a>` : e.place || ""
+  return date + " " + place
+}
+
+function goYear(y) {
+  travel(y)
+}
+
+function goPlace(lat, lon) {
+  travel(null, [lon, lat])
+}
+
+function unselect() {
+  selected = null
+  card.hidden = true
+  panel.classList.remove("open")
+  draw()
+}
+
+const show = { unions: true, parents: true, children: true } // which relatives are listed under the card
+let menuOpen = false // … menu with the toggles, stays open across selections
+
+const svg = inner => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`
+const ICONS = {
+  more: svg('<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>'),
+  right: svg('<polyline points="9 5 16 12 9 19"/>'),
+  up: svg('<polyline points="5 15 12 8 19 15"/>'),
+  close: svg('<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>'),
+}
+
+// one line: "Prénom NOM…  1750–1802", after a disk in the person's sex colour holding the relation emoji, or ♂/♀ without one
+function line(p, icon) {
+  return `<span class="sex ${p.sex}">${icon || { M: "♂", F: "♀" }[p.sex] || ""}</span><span class="name">${p.name}</span><span class="years" onclick="event.stopPropagation(); cycleDates()">${lifespan(p)}</span>`
+}
+
+function row(icon, id) {
+  return byId[id] ? `<div class="row line" onclick="pick(this, '${id}')">${line(byId[id], icon)}</div>` : ""
+}
+
+// map click: person card (bottom) with relatives listed above it; the chevron opens the details
+function select(p) {
+  console.log("select", p)
+  selected = p
+  card.hidden = false
+  const marriages = p.unions.map(u => u.year).filter(y => y)
+  summary.innerHTML = `<div class="line">${line(p)}</div><div class="buttons">`
+    + `<span class="info">${p.occupation ? "🛠️ " + p.occupation + " " : ""}${marriages.length ? "💍 " + marriages.join(", ") : ""}</span>`
+    + `<button onclick="panel.classList.toggle('open'); select(selected)">${panel.classList.contains("open") ? ICONS.up : ICONS.right}</button>`
+    + `<button onclick="unselect()">${ICONS.close}</button></div>`
+  drawMenu()
+  relatives.innerHTML = (show.unions ? p.unions.map(u => row("💍", u.spouse)).join("") : "")
+    + (show.parents ? row("👪", p.father) + row("👪", p.mother) : "")
+    + (show.children ? p.children.map(id => row("🧒", id)).join("") : "")
+  if (panel.classList.contains("open")) details()
+  relatives.classList.toggle("collapsed", panel.classList.contains("open")) // details replace the relatives list, both slide at once
+  draw()
+}
+
+// … button, top right: which relatives are listed under the card, and 🌳 ancestors
+function drawMenu() {
+  more.innerHTML = `<button onclick="menuOpen = !menuOpen; drawMenu()">${ICONS.more}</button>`
+    + (menuOpen ? `<button class="${show.unions ? "on" : ""}" onclick="toggle('unions')">💍</button>`
+      + `<button class="${show.parents ? "on" : ""}" onclick="toggle('parents')">👪</button>`
+      + `<button class="${show.children ? "on" : ""}" onclick="toggle('children')">🧒</button>`
+      + `<button class="${ancestors ? "on" : ""}" onclick="toggle('ancestors')">🌳</button>` : "")
+}
+
+function refresh() {
+  if (selected) select(selected)
+  else {
+    drawMenu()
+    draw()
+  }
+}
+
+function toggle(key) {
+  if (key == "ancestors") ancestors = !ancestors
+  else show[key] = !show[key]
+  refresh()
+}
+
+// drawer pull: a copy of the clicked line slides down and grows into the person card, the other lines fade
+function pick(el, id) {
+  const from = el.getBoundingClientRect(), to = summary.getBoundingClientRect()
+  const ghost = el.cloneNode(true)
+  ghost.firstChild.textContent = { M: "♂", F: "♀" }[byId[id].sex] || "" // the card has ♂/♀ instead of the relation emoji
+  ghost.className = "row line ghost"
+  Object.assign(ghost.style, { left: from.left + "px", top: from.top + "px", width: from.width + "px", height: from.height + "px" })
+  document.body.append(ghost)
+  for (const r of relatives.children) r.style.opacity = 0
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    Object.assign(ghost.style, { left: to.left + "px", top: to.top + "px", width: to.width + "px", height: to.height + "px", padding: "8px 10px", borderRadius: "12px" })
+  }))
+  setTimeout(() => {
+    focusOn(id)
+    ghost.remove()
+    for (const e of [...relatives.children, summary.querySelector(".buttons")]) e.classList.add("appear")
+  }, 300)
+}
+
+// dates display, clicking any date cycles: birth year → birth–death → birth–death (age)
+let dateMode = 0
+function lifespan(p) {
+  const b = p.birth && p.birth.year, d = p.death && p.death.year
+  if (dateMode == 0) return b || "?"
+  return (b || "?") + "–" + (d || "?") + (dateMode == 2 && b && d ? " (" + (d - b) + " ans)" : "")
+}
+
+function cycleDates() {
+  dateMode = (dateMode + 1) % 3
+  select(selected)
+}
+
+// unions and children in date order (undated ones last)
+function lifeEvents(p) {
+  const events = p.unions.map(u => ({ year: u.year, html: `<p><b>💍 Union</b>${when(u)}<br>${link(u.spouse)}</p>` }))
+  for (const id of p.children) {
+    const birth = byId[id].birth
+    events.push({ year: birth && birth.year, html: `<p><b>🧒 Enfant</b>${birth ? when(birth) + "<br>" : ""}${link(id)}</p>` })
+  }
+  return events.sort((a, b) => (a.year || 9999) - (b.year || 9999)).map(e => e.html).join("")
+}
+
+function details() {
+  const p = selected
+  panel.innerHTML = (p.occupation ? `<p>🛠️ ${p.occupation}</p>` : "")
+    + (p.place ? "" : "<p>Lieu inconnu</p>")
+    + (p.father || p.mother ? `<p><b>👪 Parents</b>${link(p.father)} ${link(p.mother)}</p>` : "")
+    + (p.birth ? `<p><b>👶 Naissance</b>${when(p.birth)}</p>` : "")
+    + lifeEvents(p)
+    + (p.death ? `<p><b>✝️ Décès</b>${when(p.death)}</p>` : "")
+}
+
+// person link: go to their birth (year and place)
+function focusOn(id) {
+  const p = byId[id]
+  travel(p.from, p.place && [p.place[1], p.place[0]])
+  select(p)
+}
+
+let flight = 0 // bumped to stop the running timeline animation
+const ease = t => t < 0.5 ? 4 * t ** 3 : 1 - (2 - 2 * t) ** 3 / 2
+
+// one motion to year y and place lngLat (either may be missing): the map zooms out and back in (flyTo),
+// the timeline does the same in step, zooming out until both years fit, so the jump's size shows on both
+function travel(y, lngLat) {
+  const w = wheel.clientWidth, y0 = center(), dy = y ? Math.abs(y - y0) : 0
+  const px = lngLat && mapReady ? map.project(lngLat).dist(map.project(map.getCenter())) : 0
+  const dz = lngLat && mapReady ? Math.abs(12 - map.getZoom()) : 0
+  const duration = Math.min(3000, 600 + 700 * Math.max(Math.log2(1 + px / w) + dz / 4, Math.log2(1 + dy * ppy / w)))
+  if (lngLat && mapReady) map.flyTo({ center: lngLat, zoom: 12, duration, easing: ease })
+  if (!y) return
+  const id = ++flight, ppy0 = ppy, start = performance.now()
+  const far = Math.max(60 / (last - first), Math.min(ppy0, 0.6 * w / Math.max(1, dy)))
+  const step = now => {
+    if (id != flight) return
+    const t = Math.min(1, (now - start) / duration)
+    ppy = t < 1 ? ppy0 * (far / ppy0) ** Math.sin(Math.PI * t) : ppy0
+    track.style.width = (last - first) * ppy + w + "px"
+    wheel.scrollLeft = (y0 + (y - y0) * ease(t) - first) * ppy
+    if (t < 1) return requestAnimationFrame(step)
+    drawRuler()
+    draw()
+  }
+  requestAnimationFrame(step)
+}
+
+// before login: empty map and timeline behind the dimmed password form
+min = 1500
+buildWheel()
+setYear(new Date().getFullYear())
+</script>
+</body>
+</html>
