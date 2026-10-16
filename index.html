@@ -320,10 +320,18 @@ function layTree(root) {
   // a couple moving as one (barycentre method). Kept only if it crosses less
   const crossings = () => {
     let n = 0
-    for (const row of levels) {
-      const ends = row.flatMap(p => parents(p).map(q => [q.x, p.x]))
-      for (let i = 0; i < ends.length; i++) for (let j = i + 1; j < ends.length; j++) if ((ends[i][0] - ends[j][0]) * (ends[i][1] - ends[j][1]) < 0) n++
+    // two lines cross when one's parent is left of the other's and its child right: in parent order, count the children out of order
+    const inversions = a => {
+      if (a.length < 2) return a
+      const l = inversions(a.slice(0, a.length >> 1)), r = inversions(a.slice(a.length >> 1)), out = []
+      let i = 0, j = 0
+      while (i < l.length || j < r.length) {
+        if (j == r.length || (i < l.length && l[i] <= r[j])) out.push(l[i++])
+        else { n += l.length - i; out.push(r[j++]) }
+      }
+      return out
     }
+    for (const row of levels) inversions(row.flatMap(p => parents(p).map(q => [q.x, p.x])).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(e => e[1]))
     return n
   }
   let best = crossings(), kept = list.map(p => p.x)
@@ -345,8 +353,10 @@ function layTree(root) {
     row.length = 0
     for (const unit of units) row.push(...unit)
     row.forEach((p, i) => p.x = i)
-    const n = crossings()
-    if (n < best) { best = n; kept = list.map(p => p.x) }
+    if (row == (sweep % 2 ? levels[0] : levels.at(-1))) { // end of the sweep
+      const n = crossings()
+      if (n < best) { best = n; kept = list.map(p => p.x) }
+    }
   }
   list.forEach((p, i) => p.x = kept[i])
   for (const row of levels) row.sort((p, q) => p.x - q.x)
@@ -581,6 +591,7 @@ function draw() {
 // late and drift around the fixed place dots. Drawing all of this on our own canvas over the map, on each MapLibre "render",
 // would make it exact, at the cost of a rewrite and hand-made click hit-testing.
 let placed = new Set(), settling = 0
+const AROUND = [[0, 0], [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] // own cell first: in a crowd, the one close enough is there
 function place() {
   const scale = 512 * 2 ** map.getZoom(), cells = {}, size = new Map() // cells: icons by 12px square, to only look at the 9 around
   for (const p of shown) {
@@ -589,10 +600,11 @@ function place() {
     p.y = m.y * scale
     p.anchor = null
     let d = 12
-    if (!tree) for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
+    if (!tree) search: for (const [i, j] of AROUND) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
       if (Math.hypot(q.x - p.x, q.y - p.y) < d) {
         d = Math.hypot(q.x - p.x, q.y - p.y)
         p.anchor = q
+        if (d < 4) break search // full pull already: any closer one would change nothing you can see
       }
     }
     const t = Math.min(1, Math.max(0, (12 - d) / 8))
@@ -677,11 +689,19 @@ function group(list) {
   levels = []
   for (let z = 16; z >= 0; z--) {
     if (z < 16) {
-      const r = 40 / (512 * 2 ** z), next = []
+      const r = 40 / (512 * 2 ** z), next = [], cells = {} // zones by r square of their first part, to only look at the 9 around
       for (const g of prev) {
-        const near = next.find(n => Math.hypot(n.parts[0].x - g.x, n.parts[0].y - g.y) < r)
+        const cx = Math.floor(g.x / r), cy = Math.floor(g.y / r)
+        let near = null // the first made of the zones in reach
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (const n of cells[(cx + i) + "," + (cy + j)] || []) {
+          if (Math.hypot(n.parts[0].x - g.x, n.parts[0].y - g.y) < r && (!near || n.i < near.i)) near = n
+        }
         if (near) near.parts.push(g)
-        else next.push({ parts: [g] })
+        else {
+          const n = { parts: [g], i: next.length }
+          next.push(n)
+          ;(cells[cx + "," + cy] = cells[cx + "," + cy] || []).push(n)
+        }
       }
       prev = next.map(({ parts }) => {
         if (parts.length == 1) return parts[0]
