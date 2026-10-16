@@ -236,8 +236,13 @@ function drawRuler() {
   for (let y = Math.ceil(left / fine) * fine; x(y) < w; y += fine) {
     ctx.globalAlpha = fade(steps.findLast(s => y % s == 0))
     ctx.fillRect(Math.round(x(y)), 0, 1, h)
-    ctx.globalAlpha = 1
-    if (y % step == 0) ctx.fillText(y, x(y) + 4, 52)
+  }
+  ctx.globalAlpha = 1
+  // numbers on top of all the ticks, with a white outline so the ticks behind don't cross them
+  Object.assign(ctx, { strokeStyle: "white", lineWidth: 4, lineJoin: "round" })
+  for (let y = Math.ceil(left / step) * step; x(y) < w; y += step) {
+    ctx.strokeText(y, x(y) + 4, 52)
+    ctx.fillText(y, x(y) + 4, 52)
   }
 }
 
