@@ -50,7 +50,7 @@
   #legend p { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
   #legend p > :first-child { flex: 0 0 34px; display: grid; place-items: center; }
   #more button.option { display: flex; align-items: center; gap: 8px; width: auto; padding: 0 9px 0 14px; font: 15px system-ui, -apple-system, sans-serif; }
-  #relatives { max-height: 80vh; overflow: hidden; margin-left: -10px; padding-left: 10px; transition: opacity 0.3s; } /* room on the left for the stamps */
+  #relatives { max-height: calc(100dvh - 250px); overflow-y: auto; overscroll-behavior: contain; margin-left: -10px; padding-left: 10px; transition: opacity 0.3s; } /* room on the left for the stamps */
   #relatives.collapsed { opacity: 0; pointer-events: none; }
   #relatives, #panel { grid-area: 1 / 1; align-self: end; } /* same cell: the details unroll over the relatives, which stay put behind */
   .row { padding: 6px 10px; background: white; cursor: pointer; }
