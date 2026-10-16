@@ -10,7 +10,8 @@
   body { margin: 0; font-family: sans-serif; }
   #login { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 2000; background: rgba(0, 0, 0, 0.35); color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
   #login input, #login select { font-size: 16px; } /* 16px stops iOS zooming on focus */
-  #map { position: fixed; top: 0; left: 0; right: 0; bottom: 0; }
+  #map, #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+  #overlay { pointer-events: none; } /* clicks go to the map, which hands them to ours */
   #ruler { position: fixed; left: 0; bottom: 0; width: 100%; height: 80px; background: white; }
   #wheel { position: fixed; left: 0; right: 0; bottom: 0; height: 80px; overflow-x: scroll; scrollbar-width: none; touch-action: pan-x; user-select: none; cursor: grab; }
   #wheel::-webkit-scrollbar { display: none; }
@@ -87,6 +88,7 @@
   <span id="err"></span>
 </form>
 <div id="map"></div>
+<canvas id="overlay"></canvas>
 <canvas id="ruler"></canvas>
 <div id="wheel"><div id="track"></div></div>
 <div id="range"></div>
@@ -123,45 +125,13 @@ fetch("https://tiles.openfreemap.org/styles/liberty").then(r => r.json()).then(s
   baseLayers = style.layers.map(l => l.id).filter(id => id != "background") // hidden in the tree
   map = new maplibregl.Map({ container: "map", style, center: [2.5, 46.5], zoom: 5, maxZoom: 18 })
   map.on("load", () => {
-    const empty = { type: "FeatureCollection", features: [] }
-    map.addSource("lines", { type: "geojson", data: empty })
-    map.addSource("people", { type: "geojson", data: empty })
-    map.addSource("counts", { type: "geojson", data: empty })
-    map.addSource("trail", { type: "geojson", data: empty })
-    map.addSource("dim", { type: "geojson", data: empty })
-    addIcons()
-    const icons = { "icon-image": ["get", "icon"], "icon-allow-overlap": true, "icon-ignore-placement": true }
-    map.addLayer({ id: "lines", type: "line", source: "lines", paint: { "line-color": ["match", ["get", "kind"], "union", "red", "gray"], "line-width": 1, "line-opacity": ["case", ["get", "dim"], 0.3, 1] } })
-    map.addLayer({ id: "dim", type: "symbol", source: "dim", layout: icons })
-    map.addLayer({ id: "root", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "root"], paint: { "circle-color": "#c9d8f2", "circle-radius": 18 } })
-    map.addLayer({ id: "trail-line", type: "line", source: "trail", filter: ["==", ["get", "kind"], "path"], paint: { "line-color": "black", "line-width": 2, "line-dasharray": [3, 3] } })
-    map.addLayer({ id: "people", type: "symbol", source: "people", layout: icons })
-    // names under the figures, in the tree only
-    map.addLayer({ id: "names", type: "symbol", source: "people", paint: { "text-halo-color": "white", "text-halo-width": 2 },
-      layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-anchor": "top", "text-offset": [0, 1.2], "text-max-width": 7, visibility: "none" } })
+    // no turning or tilting: our canvas lays the world flat, north up
+    map.dragRotate.disable()
+    map.touchZoomRotate.disableRotation()
+    map.touchPitch.disable()
+    map.on("render", paint)
     map.on("move", followMap)
-    map.addLayer({ id: "trail-stops", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "stop"],
-      paint: { "circle-color": "white", "circle-radius": 2, "circle-stroke-color": "black", "circle-stroke-width": 2 } })
-    map.addLayer({ id: "trail-labels", type: "symbol", source: "trail", filter: ["==", ["get", "kind"], "stop"],
-      layout: { "text-field": ["get", "label"], "text-font": ["Noto Sans Regular"], "text-size": 13, "text-anchor": "left", "text-offset": [1, 0], "text-allow-overlap": true },
-      paint: { "text-halo-color": "white", "text-halo-width": 2 } })
-    map.addLayer({ id: "selected", type: "circle", source: "trail", filter: ["==", ["get", "kind"], "selected"],
-      paint: { "circle-opacity": 0, "circle-radius": 17, "circle-stroke-color": "black", "circle-stroke-width": 3 } })
-    map.addLayer({ id: "counts", type: "symbol", source: "counts",
-      layout: { "text-field": ["get", "n"], "text-font": ["Noto Sans Bold"], "text-size": 15, "text-allow-overlap": true, "text-ignore-placement": true },
-      paint: { "text-halo-color": "white", "text-halo-width": 2 } })
-    map.on("click", "people", e => pickOnMap(byId[e.features[0].properties.id]))
-    map.on("click", "dim", e => pickOnMap(byId[e.features[0].properties.id]))
-    // count click: zoom until the zone's people fill the screen
-    map.on("click", "counts", e => {
-      const bounds = new maplibregl.LngLatBounds()
-      for (const p of levels[shownZoom][e.features[0].properties.i].members) bounds.extend(p.ll)
-      map.fitBounds(bounds, { padding: 80, maxZoom: 17 })
-    })
-    map.on("zoom", () => {
-      place()
-      if (shownZoom != level()) drawCounts()
-    })
+    map.on("click", e => click(e.point))
     mapReady = true
     draw()
   })
@@ -412,7 +382,6 @@ function switchView(change) {
   scrollWheel((year - first) * ppy)
   drawRuler()
   for (const id of baseLayers) map.setLayoutProperty(id, "visibility", tree ? "none" : "visible")
-  map.setLayoutProperty("names", "visibility", tree ? "visible" : "none")
   syncing = true // the zoom limits can move the map: not the timeline's business
   map.setMinZoom(now == "years" ? zoomOf(60 / (last - first)) : null)
   map.setMaxZoom(now == "years" ? zoomOf(60) : 18)
@@ -575,36 +544,43 @@ function draw() {
     group.forEach((p, i) => {
       const angle = 2 * Math.PI * i / group.length
       p.ll = [lon + meters * Math.cos(angle) / (111320 * Math.cos(lat * Math.PI / 180)), lat + meters * Math.sin(angle) / 111320] // [lon, lat] like MapLibre
+      p.m = maplibregl.MercatorCoordinate.fromLngLat(p.ll) // world spot, 0 to 1
     })
   }
   group(shown.filter(inRange))
-  drawCounts()
-  place()
+  laidZoom = null
+  map.triggerRepaint()
 }
 
-// icons, lines and the selection ring, redrawn at each zoom step. Groups show as a stack of cards, each 3px right and 3px up
+// layout of the icons at the current zoom, in world pixels (the map at this zoom, 0 at the top left of the world); paint() moves
+// them with the map. Groups show as a stack of cards, each 3px right and 3px up
 // behind the one before: 1 card for one person, 2 for 2 to 10 people, 3 for more than 10, the others hidden behind the last.
 // Each icon leans on its anchor, the nearest icon before it within 12px. Zooming scales every distance alike, so anchors never
 // change while they matter, and the pull is a function of the distance alone: none at 12px, full under 4px. So joining and
 // leaving follow the zoom exactly; only the card an icon sits on (when a group passes 2 or 10) glides, a third of the way each frame.
-// Known jank: setData rebuilds the sources in MapLibre's worker, so while zooming the icons, lines and ring show a frame or more
-// late and drift around the fixed place dots. Drawing all of this on our own canvas over the map, on each MapLibre "render",
-// would make it exact, at the cost of a rewrite and hand-made click hit-testing.
-let placed = new Set(), settling = 0
+let placed = new Set(), settling = 0, laidZoom = null
+let lines = [], dots = [], dims = [] // what paint() draws: [a, b, kind, dim] lines between people, icons in and outside the period
 const AROUND = [[0, 0], [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] // own cell first: in a crowd, the one close enough is there
 function place() {
-  const scale = 512 * 2 ** map.getZoom(), cells = {}, size = new Map() // cells: icons by 12px square, to only look at the 9 around
+  const scale = 512 * 2 ** map.getZoom(), cells = {}, fine = {}, size = new Map() // icons by 12px and 4px square, to only look at the 9 around
   for (const p of shown) {
-    const m = maplibregl.MercatorCoordinate.fromLngLat(p.ll), cx = Math.floor(m.x * scale / 12), cy = Math.floor(m.y * scale / 12)
-    p.x = m.x * scale // own spot, in screen pixels
-    p.y = m.y * scale
+    p.x = p.m.x * scale // own spot
+    p.y = p.m.y * scale
+    const cx = Math.floor(p.x / 12), cy = Math.floor(p.y / 12), fx = Math.floor(p.x / 4), fy = Math.floor(p.y / 4)
     p.anchor = null
     let d = 12
-    if (!tree) search: for (const [i, j] of AROUND) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
+    // first one under 4px (full pull already: any closer one would change nothing you can see), else the nearest under 12px
+    if (!tree) close: for (const [i, j] of AROUND) for (const q of fine[(fx + i) + "," + (fy + j)] || []) {
+      if (Math.hypot(q.x - p.x, q.y - p.y) < 4) {
+        d = Math.hypot(q.x - p.x, q.y - p.y)
+        p.anchor = q
+        break close
+      }
+    }
+    if (!tree && !p.anchor) for (const [i, j] of AROUND) for (const q of cells[(cx + i) + "," + (cy + j)] || []) {
       if (Math.hypot(q.x - p.x, q.y - p.y) < d) {
         d = Math.hypot(q.x - p.x, q.y - p.y)
         p.anchor = q
-        if (d < 4) break search // full pull already: any closer one would change nothing you can see
       }
     }
     const t = Math.min(1, Math.max(0, (12 - d) / 8))
@@ -613,6 +589,7 @@ function place() {
     p.rank = size.get(p.root) || 0 // 0 for the front card, then 1, 2… in order of joining
     size.set(p.root, p.rank + 1)
     ;(cells[cx + "," + cy] = cells[cx + "," + cy] || []).push(p)
+    ;(fine[fx + "," + fy] = fine[fx + "," + fy] || []).push(p)
   }
   let moving = false
   for (const p of shown) {
@@ -620,71 +597,193 @@ function place() {
     if (!placed.has(p)) p.card = card
     p.card += (card - p.card) / 3
     if (Math.abs(card - p.card) > 0.01) moving = true
-    p.sx = p.x // shown spot, in screen pixels
+    p.sx = p.x // shown spot
     p.sy = p.y
     if (p.anchor) {
       const a = p.anchor, behind = (p.card - a.card) * 3
       p.sx += (a.sx + behind - p.x) * p.pull
       p.sy += (a.sy - behind - p.y) * p.pull
     }
-    const ll = new maplibregl.MercatorCoordinate(p.sx / scale, p.sy / scale).toLngLat()
-    p.pos = [ll.lng, ll.lat]
+    p.hidden = p.rank > 2 && p.pull == 1 && card == 2 && Math.abs(p.card - 2) < 0.01 // right behind the third card: no need to draw
   }
   placed = new Set(shown)
   cancelAnimationFrame(settling)
-  settling = moving ? requestAnimationFrame(place) : 0
+  settling = moving ? requestAnimationFrame(() => { laidZoom = null; map.triggerRepaint() }) : 0
   // lines join people in the years or in 🌳 (not the light gray ones); a line is faded when either end is outside the years.
   // The tree has no period: all its lines, between everyone, never faded
-  const lines = [], dots = [], dim = [], trail = []
+  lines = []
+  dots = []
+  dims = []
   const linked = new Set(tree ? shown : shown.filter(p => inRange(p) || (lineage && lineage.has(p))))
   const out = p => !tree && !inRange(p)
   for (const p of linked) {
     const ps = [byId[p.father], byId[p.mother]].filter(q => linked.has(q))
-    if (tree && ps.length) {
-      // tree: one straight line from the middle of the parents to the child (bars at a shared height ran into each other)
-      const top = [ps.reduce((s, q) => s + q.pos[0], 0) / ps.length, ps.reduce((s, q) => s + q.pos[1], 0) / ps.length]
-      lines.push(feature("LineString", [top, p.pos], { kind: "parent", dim: false }))
-    }
-    else for (const q of ps) if (links) lines.push(feature("LineString", [q.pos, p.pos], { kind: "parent", dim: out(p) || out(q) }))
+    // tree: one straight line from the middle of the parents to the child
+    if (tree && ps.length) lines.push([{ sx: ps.reduce((s, q) => s + q.sx, 0) / ps.length, sy: ps.reduce((s, q) => s + q.sy, 0) / ps.length }, p, "parent", false])
+    else if (links) for (const q of ps) lines.push([q, p, "parent", out(p) || out(q)])
     for (const u of p.unions) {
-      if ((links || tree) && linked.has(byId[u.spouse])) lines.push(feature("LineString", [byId[u.spouse].pos, p.pos], { kind: "union", dim: out(p) || out(byId[u.spouse]) }))
+      const s = byId[u.spouse]
+      if ((links || tree) && linked.has(s) && p.id < s.id) lines.push([s, p, "union", out(p) || out(s)])
     }
   }
   for (const p of shown) {
-    const icon = { M: "man", F: "woman" }[p.sex] || "person"
-    if (!out(p)) dots.push(feature("Point", p.pos, { id: p.id, icon, name: p.name }))
-    else dim.push(feature("Point", p.pos, { id: p.id, icon: (linked.has(p) ? "gray-" : "light-") + icon }))
+    p.icon = ({ M: "man", F: "woman" }[p.sex] || "person")
+    if (!out(p)) dots.push(p)
+    else {
+      p.icon = (linked.has(p) ? "gray-" : "light-") + p.icon
+      dims.push(p)
+    }
   }
+}
 
-  // selected person: black ring, and on the world map their life's places (white circles) joined by a dashed line in date order
-  if (selected && !tree) {
-    const stops = selected.places.slice().sort((a, b) => (a.year || 9999) - (b.year || 9999))
-    trail.push(feature("LineString", stops.map(s => [s.lon, s.lat]), { kind: "path" }))
+// our canvas over the map, painted on each map frame so it moves with it exactly: lines, people outside then in the period,
+// the tree's root, the selected person's life places and ring, names in the tree, and the counts. Off-screen icons are skipped
+const overlay = document.getElementById("overlay"), octx = overlay.getContext("2d")
+let hits = [] // what was painted, for clicks, top last: [x, y, person] icons, [x, y, null, zone] counts
+function paint() {
+  const W = overlay.clientWidth, H = overlay.clientHeight, dpr = devicePixelRatio, ctx = octx
+  if (overlay.width != Math.round(W * dpr) || overlay.height != Math.round(H * dpr)) {
+    overlay.width = Math.round(W * dpr)
+    overlay.height = Math.round(H * dpr)
+  }
+  if (map.getZoom() !== laidZoom) {
+    laidZoom = map.getZoom()
+    place()
+  }
+  const scale = 512 * 2 ** laidZoom, c = maplibregl.MercatorCoordinate.fromLngLat(map.getCenter())
+  const ox = W / 2 - c.x * scale, oy = H / 2 - c.y * scale // world pixels to screen
+  const world = ll => { const m = maplibregl.MercatorCoordinate.fromLngLat(ll); return [m.x * scale + ox, m.y * scale + oy] }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, W, H)
+  hits = []
+  const halo = (text, x, y) => { ctx.strokeText(text, x, y); ctx.fillText(text, x, y) }
+  Object.assign(ctx, { lineJoin: "round", lineCap: "butt" })
+
+  ctx.lineWidth = 1
+  for (const [kind, color] of [["parent", "gray"], ["union", "red"]]) for (const dim of [true, false]) {
+    ctx.strokeStyle = color
+    ctx.globalAlpha = dim ? 0.3 : 1
+    ctx.beginPath()
+    for (const [a, b, k, d] of lines) if (k == kind && d == dim) {
+      ctx.moveTo(a.sx + ox, a.sy + oy)
+      ctx.lineTo(b.sx + ox, b.sy + oy)
+    }
+    ctx.stroke()
+  }
+  ctx.globalAlpha = 1
+
+  const icons = list => {
+    for (let i = list.length - 1; i >= 0; i--) { // the front cards, first in the list, end on top
+      const p = list[i], x = p.sx + ox, y = p.sy + oy, img = SPRITES[p.icon], w = img.width / dpr, h = img.height / dpr
+      if (p.hidden || x < -w || x > W + w || y < -h || y > H + h) continue
+      ctx.drawImage(img, x - w / 2, y - h / 2, w, h)
+      hits.push([x, y, p])
+    }
+  }
+  icons(dims)
+  if (tree && shown.includes(treeRoot)) {
+    ctx.fillStyle = "#c9d8f2"
+    ctx.beginPath()
+    ctx.arc(treeRoot.sx + ox, treeRoot.sy + oy, 18, 0, 2 * Math.PI)
+    ctx.fill()
+  }
+  // selected person's life places, in date order, on the world map
+  const stops = selected && !tree ? selected.places.slice().sort((a, b) => (a.year || 9999) - (b.year || 9999)) : []
+  if (stops.length) {
+    Object.assign(ctx, { strokeStyle: "black", lineWidth: 2 })
+    ctx.setLineDash([6, 6])
+    ctx.beginPath()
+    for (const s of stops) ctx.lineTo(...world([s.lon, s.lat]))
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+  icons(dots)
+  if (tree) { // names under the figures, wrapped at 7 em; a name that would cover another is left out
+    Object.assign(ctx, { font: "12px system-ui, -apple-system, sans-serif", textAlign: "center", textBaseline: "top", fillStyle: "#222", strokeStyle: "white", lineWidth: 4 })
+    const taken = []
+    for (const p of dots) {
+      const x = p.sx + ox, y = p.sy + oy + 14
+      if (x < -60 || x > W + 60 || y < -40 || y > H + 10) continue
+      if (!p.label) {
+        p.label = wrap(ctx, p.name, 84)
+        p.labelWidth = Math.max(...p.label.map(l => ctx.measureText(l).width))
+      }
+      const w = p.labelWidth, box = [x - w / 2, y, x + w / 2, y + 14 * p.label.length]
+      if (taken.some(t => t[0] < box[2] && box[0] < t[2] && t[1] < box[3] && box[1] < t[3])) continue
+      taken.push(box)
+      p.label.forEach((l, i) => halo(l, x, y + 14 * i))
+    }
+  }
+  if (stops.length) {
     const labels = {}
     for (const s of stops) {
-      const key = s.lon + "," + s.lat
-      const text = (KINDS[s.kind] || s.kind) + (s.year ? " " + s.year : "")
+      const key = s.lon + "," + s.lat, text = (KINDS[s.kind] || s.kind) + (s.year ? " " + s.year : "")
       labels[key] = labels[key] ? labels[key] + ", " + text : text
     }
-    for (const key in labels) trail.push(feature("Point", key.split(",").map(Number), { kind: "stop", label: labels[key] }))
+    Object.assign(ctx, { font: "13px system-ui, -apple-system, sans-serif", textAlign: "left", textBaseline: "middle", strokeStyle: "white", lineWidth: 4 })
+    for (const key in labels) {
+      const [x, y] = world(key.split(",").map(Number))
+      Object.assign(ctx, { fillStyle: "white", strokeStyle: "black", lineWidth: 2 })
+      ctx.beginPath()
+      ctx.arc(x, y, 2, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.stroke()
+      Object.assign(ctx, { fillStyle: "black", strokeStyle: "white", lineWidth: 4 })
+      halo(labels[key], x + 13, y)
+    }
   }
-  if (selected && shown.includes(selected)) trail.push(feature("Point", selected.pos, { kind: "selected" }))
-  if (tree && shown.includes(treeRoot)) trail.push(feature("Point", treeRoot.pos, { kind: "root" }))
-  map.getSource("lines").setData({ type: "FeatureCollection", features: lines })
-  map.getSource("people").setData({ type: "FeatureCollection", features: dots })
-  map.getSource("dim").setData({ type: "FeatureCollection", features: dim })
-  map.getSource("trail").setData({ type: "FeatureCollection", features: trail })
+  if (selected && shown.includes(selected) && !selected.hidden) {
+    Object.assign(ctx, { strokeStyle: "black", lineWidth: 3 })
+    ctx.beginPath()
+    ctx.arc(selected.sx + ox, selected.sy + oy, 17, 0, 2 * Math.PI)
+    ctx.stroke()
+  }
+  // number of people over each zone of the current zoom that holds more than one
+  if (!tree) {
+    Object.assign(ctx, { font: "bold 15px system-ui, -apple-system, sans-serif", textAlign: "center", textBaseline: "middle", fillStyle: "black", strokeStyle: "white", lineWidth: 4 })
+    for (const g of levels[level()] || []) {
+      const x = g.x * scale + ox, y = g.y * scale + oy
+      if (g.members.length < 2 || x < -30 || x > W + 30 || y < -30 || y > H + 30) continue
+      halo(g.members.length, x, y)
+      hits.push([x, y, null, g])
+    }
+  }
+}
+
+// text cut into lines at most width wide, on spaces
+function wrap(ctx, text, width) {
+  const out = []
+  for (const word of text.split(" ")) {
+    if (out.length && ctx.measureText(out.at(-1) + " " + word).width <= width) out[out.length - 1] += " " + word
+    else out.push(word)
+  }
+  return out
+}
+
+// map click: a count zooms until its zone's people fill the screen; a person is picked; the top one under the finger wins
+function click(pt) {
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const [x, y, p, zone] = hits[i]
+    if (zone && Math.abs(pt.x - x) < 14 && Math.abs(pt.y - y) < 11) {
+      const bounds = new maplibregl.LngLatBounds()
+      for (const q of zone.members) bounds.extend(q.ll)
+      return map.fitBounds(bounds, { padding: 80, maxZoom: 17 })
+    }
+  }
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const [x, y, p] = hits[i]
+    if (p && Math.abs(pt.x - x) < 9 && Math.abs(pt.y - y) < 16) return pickOnMap(p)
+  }
 }
 
 // zones for the counts: levels[z] holds the zones at zoom z, made by joining the zones of zoom z + 1 closer than 40px; no zones from zoom 16
-let levels = [], shownZoom = 0
+let levels = []
 const level = () => Math.max(0, Math.min(16, Math.floor(map.getZoom())))
 
 function group(list) {
   let prev = list.map(p => {
     p.at = [] // p.at[z]: p's group at zoom z
-    const m = maplibregl.MercatorCoordinate.fromLngLat(p.ll)
-    return { x: m.x, y: m.y, members: [p] }
+    return { x: p.m.x, y: p.m.y, members: [p] }
   })
   levels = []
   for (let z = 16; z >= 0; z--) {
@@ -714,19 +813,8 @@ function group(list) {
   }
 }
 
-// number of people over each zone of the current zoom that holds more than one
-function drawCounts() {
-  shownZoom = level()
-  const features = []
-  if (!tree) (levels[shownZoom] || []).forEach((g, i) => {
-    if (g.members.length < 2) return
-    const ll = new maplibregl.MercatorCoordinate(g.x, g.y).toLngLat()
-    features.push(feature("Point", [ll.lng, ll.lat], { i, n: g.members.length }))
-  })
-  map.getSource("counts").setData({ type: "FeatureCollection", features })
-}
-
 // bathroom-sign figures with a white outline: blue man, pink woman, black for unknown sex
+const SPRITES = {}
 function addIcons() {
   const s = 1.2 * devicePixelRatio, pad = 1.5
   const make = (name, color, woman) => {
@@ -739,7 +827,7 @@ function addIcons() {
     const path = figure(pad, pad, woman)
     ctx.stroke(path)
     ctx.fill(path)
-    map.addImage(name, ctx.getImageData(0, 0, c.width, c.height), { pixelRatio: devicePixelRatio })
+    SPRITES[name] = c
   }
   make("man", "#2f6fd6")
   make("woman", "#e0457b", true)
@@ -768,10 +856,6 @@ function figure(x, y, woman) {
     p.rect(x + 5.3, y + 12, 2.2, 10)
   }
   return p
-}
-
-function feature(type, coordinates, properties) {
-  return { type: "Feature", geometry: { type, coordinates }, properties }
 }
 
 const KINDS = { NAISSANCE: "Naissance", BAPTEME: "Baptême", UNION: "Union", DECES: "Décès", INHUMATION: "Inhumation", PROFESSION: "Profession" }
@@ -1035,6 +1119,7 @@ function travel(y, lngLat, keepZoom) {
 }
 
 // before login: empty map and timeline behind the dimmed password form, the … menu above it
+addIcons()
 drawMenu()
 min = 1500
 buildWheel()
